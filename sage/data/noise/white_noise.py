@@ -186,12 +186,11 @@ def _default_cutoff(spec, low_frequency_cutoff):
     except Exception:
         return 10.0
 
-
 def sample_synthetic_noise(duration, asd=None, *, sample_rate=None, batch=None,
                            detectors=None, domain="td", seed=None,
                            unit_psd=True, low_frequency_cutoff=None,
                            filter_duration=None, numpy=False, device=None,
-                           threads=1, dtype=torch.float32):
+                           threads=1, dtype=torch.float32, is_asd=False):
     """
     Draw a synthetic noise sample of a given duration.  The one to reach for.
 
@@ -289,6 +288,8 @@ def sample_synthetic_noise(duration, asd=None, *, sample_rate=None, batch=None,
         The *real* dtype, ``float32`` by default; ``domain="fd"`` returns the
         matching complex type.  Keep it at float32 — ``randn`` in float64 is
         ~6x slower and an ASD needs nothing beyond single precision.
+    is_asd : bool
+        If True, the function will return the ASD used for colouring the noise along with the noise
 
     Returns
     -------
@@ -350,6 +351,7 @@ def sample_synthetic_noise(duration, asd=None, *, sample_rate=None, batch=None,
         n_full = _fast_fft_len(n_time + 2 * int(round(pad_seconds * sample_rate)))
         freqs = torch.fft.rfftfreq(n_full, d=1.0 / sample_rate, device=device,
                                    dtype=torch.float64)
+
         asd = torch.stack([
             _resolve_asd_cached(spec, freqs=freqs, sample_rate=sample_rate,
                                 is_psd=False,
@@ -359,6 +361,7 @@ def sample_synthetic_noise(duration, asd=None, *, sample_rate=None, batch=None,
                                 device=device, dtype=dtype)
             for spec in asd
         ])
+
         # Already resolved, already cut off — do not re-apply either downstream.
         low_frequency_cutoff, filter_duration = None, None
 
@@ -367,26 +370,35 @@ def sample_synthetic_noise(duration, asd=None, *, sample_rate=None, batch=None,
     gen = _make_generator(_derive_seed(seed) if seed is not None else None, device)
 
     if asd is None:
-        if domain == "fd":
-            out = white_noise_fd(shape, sample_rate, generator=gen,
-                                 unit_psd=unit_psd, device=device,
-                                 threads=threads, dtype=dtype)
-        else:
-            out = white_noise_td(shape, sample_rate, generator=gen,
-                                 unit_psd=unit_psd, device=device,
-                                 threads=threads, dtype=dtype)
+            if domain == "fd":
+                out = white_noise_fd(shape, sample_rate, generator=gen, unit_psd=unit_psd,
+                                      device=device, threads=threads,dtype=dtype, )
+            else:
+                out = white_noise_td(shape, sample_rate, generator=gen, unit_psd=unit_psd, 
+                                     device=device,threads=threads,dtype=dtype,)
+
+            if is_asd: # Generate flat ASD for white noise if returning ASD is requested
+                n_freqs = shape[-1] // 2 + 1 if domain == "td" else shape[-1]
+                asd = torch.ones(n_freqs, device=device, dtype=dtype)
     else:
-        out = coloured_noise_td(
-            asd, shape, sample_rate, generator=gen,
-            low_frequency_cutoff=low_frequency_cutoff,
-            filter_duration=filter_duration, device=device, threads=threads,
-            dtype=dtype,
-        )
+        out = coloured_noise_td(asd, shape, sample_rate, generator=gen,
+                                low_frequency_cutoff=low_frequency_cutoff,
+                                filter_duration=filter_duration, device=device,
+                                threads=threads, dtype=dtype)
         if domain == "fd":
             out = torch.fft.rfft(out, dim=-1, norm="forward")
 
-    return out.cpu().numpy() if numpy else out
+    # Format output array/tensor
+    out_res = out.cpu().numpy() if numpy else out
 
+    if is_asd:
+        asd_res = (
+            asd.cpu().numpy()
+            if numpy and isinstance(asd, torch.Tensor)
+            else asd
+        )
+        return out_res, asd_res
+    return out_res
 
 def available_asds(search=None):
     """
