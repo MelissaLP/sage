@@ -1,9 +1,11 @@
 # EuCAIF whitened BBH dataset
 
 Whitened two-detector (H1, L1) strain examples for binary-black-hole detection.
-Each example is either **Gaussian noise only** (class 0) or **noise plus an
-IMRPhenomPv2 signal** (class 1). Produced by `make_whitened_examples.py` with
-[sage](https://github.com/MelissaLP/sage).
+Each example is either **Gaussian noise only** (class 0) or **noise plus a
+non-spinning IMRPhenomPv2 signal** (class 1). Produced by
+`make_whitened_examples.py` with [sage](https://github.com/MelissaLP/sage).
+The source population and window follow the ggwd / ML-challenge setup; see
+"Relation to the ggwd setup" below.
 
 ## At a glance
 
@@ -11,27 +13,30 @@ IMRPhenomPv2 signal** (class 1). Produced by `make_whitened_examples.py` with
 |---|---|
 | Detectors | H1, L1 (in that order along axis 1) |
 | Sample rate | 2048 Hz |
-| Stored duration | 4 s per example (8192 samples) |
-| Array shape | `x`: `(N, 2, 8192)` |
+| Stored duration | 2 s per example (4096 samples) |
+| Array shape | `x`: `(N, 2, 4096)` |
 | Storage dtype | float32 by default (float64 optional) |
-| Size per example | 64 KB (float32) / 128 KB (float64) |
+| Size per example | 32 KB (float32) / 64 KB (float64) |
 | Classes | 50 % noise (0), 50 % signal + noise (1), shuffled |
 | Noise | Stationary Gaussian, coloured by `aLIGOZeroDetHighPower` (both detectors) |
-| Signal model | IMRPhenomPv2 (precessing spins), `ConstantProjection` onto each detector |
+| Signal model | IMRPhenomPv2, non-spinning; `ConstantProjection` onto each detector |
 | Signal strength | Physical: set by the sampled luminosity distance (SNR rescaling optional) |
-| Whitening | FIR inverse-spectrum truncation, equivalent to gwpy 3.0.14 `TimeSeries.whiten` |
-| Merger time | `tc` uniform in [2.5, 3.5] s from the start of the 4 s window |
+| Whitening | 4 s FIR inverse-spectrum truncation, equivalent to gwpy 3.0.14 `TimeSeries.whiten` |
+| Merger time | `tc` uniform in [0.5, 1.5] s from the start of the 2 s window |
 
 ## How an example is made
 
 1. **Noise.** Each example gets its own independent noise realisation,
-   generated with `sage.data.noise.sample_synthetic_noise` over an 8 s window
-   (4 s sample + 2 s padding on each side). The noise is coloured by
+   generated with `sage.data.noise.sample_synthetic_noise` over a 10 s window
+   (2 s sample + 4 s padding on each side). The noise is coloured by
    `aLIGOZeroDetHighPower` and cut from a longer span, so it isn't periodic.
 2. **Signal (class 1 only).** Source parameters are drawn from
    `sage_eucaif_waveform.yaml` (the prior's YAML is stored in the file
    attributes). IMRPhenomPv2 generates the projected strain in the frequency
-   domain. The signal is converted to the time domain and added to the noise.
+   domain on the 10 s grid. The signal is converted to the time domain and
+   added to the noise. The 4 s padding is long enough that even the longest
+   signals (10 + 10 M☉, about 6 s from 20 Hz) fit in the window without
+   wrapping around.
 3. **Signal amplitude.** By default each signal keeps the physical amplitude
    set by its sampled luminosity distance, as sage's `IMRPhenomPv2` does
    without an `augment`. The amplitudes agree with PyCBC's IMRPhenomPv2 for
@@ -42,16 +47,18 @@ IMRPhenomPv2 signal** (class 1). Produced by `make_whitened_examples.py` with
    stay consistent. That is the same convention as sage's
    `OptimalSNRRescaler` augment, but the distances no longer follow the
    prior.
-4. **Whitening.** The full 8 s is whitened with `sage.dsp.whiten.FIRWhitening`
-   using the known ASD: a 4 s FIR filter, 15 Hz highpass, Hann taper. That
-   removes 2 s from each end, leaving exactly the central 4 s sample. Whitened
-   noise has zero mean and unit variance.
+4. **Whitening.** The full 10 s is whitened with `sage.dsp.whiten.FIRWhitening`
+   using the known ASD: a 4 s FIR filter (as ggwd's
+   `whitening_max_filter_duration`), 15 Hz highpass, Hann taper. The whitened
+   series is then cropped to the central 2 s sample, which is well clear of
+   the 2 s the filter corrupts at each end. Whitened noise has zero mean and
+   unit variance.
 
 ## File layout (HDF5)
 
 ```
-x                   (N, 2, 8192)  float32    whitened strain [example, detector, time] (float64 with --store-dtype float64)
-t                   (8192,)       float64    time of each sample, s from window start
+x                   (N, 2, 4096)  float32    whitened strain [example, detector, time] (float64 with --store-dtype float64)
+t                   (4096,)       float64    time of each sample, s from window start
 metadata/class      (N,)          int8       0 = noise only, 1 = signal + noise
 metadata/tc         (N,)          float64    merger time, s from window start
 metadata/mchirp     (N,)          float64    chirp mass, solar masses
@@ -80,7 +87,7 @@ metadata/snr_det    (N, 2)        float32    per-detector optimal SNR (H1, L1)
 | `gmst` | Greenwich Mean Sidereal Time used to project the signal onto the detectors. sage's `ConstantProjection` draws it uniformly at random for each signal instead of deriving it from a GPS time. The detector response depends on `ra` only through the hour angle `gmst - ra`, so **`ra` alone can't be recovered from the data**. To estimate the sky position, regress the hour angle `(gmst - ra) mod 2π` (with `dec`) instead of `ra`. |
 | `class` | Label for detection: 0 for noise, 1 for signal. |
 | `distance` | Luminosity distance in Mpc. Derived by the prior from `chirp_distance` (uniform in volume, 130–350 Mpc) and `mchirp`, so heavier systems are placed farther away; it ranges from about 1 to 7 Gpc. It is updated when `--snr-range` is used. |
-| `snr`, `snr_det` | Optimal SNRs of the injected signal, not matched-filter SNRs recovered from the noisy data. |
+| `snr`, `snr_det` | Optimal SNRs of the whole injected signal, not matched-filter SNRs recovered from the noisy data. For light systems part of the inspiral starts before the 2 s window, so the SNR actually contained in the window can be lower (down to about 0.89 × `snr`; the median ratio is 1.00). |
 
 ## Loading
 
@@ -88,7 +95,7 @@ metadata/snr_det    (N, 2)        float32    per-detector optimal SNR (H1, L1)
 import h5py, numpy as np, torch
 
 with h5py.File("eucaif_whitened.h5", "r") as f:
-    x = torch.from_numpy(f["x"][:1000])                          # (1000, 2, 8192)
+    x = torch.from_numpy(f["x"][:1000])                          # (1000, 2, 4096)
     y = torch.from_numpy(f["metadata/class"][:1000].astype(np.int64))
     meta = {k: f[f"metadata/{k}"][:1000] for k in ["tc", "mchirp", "ra", "dec"]}
     fs = f.attrs["sample_rate"]
@@ -108,29 +115,43 @@ python make_whitened_examples.py sage_eucaif_waveform.yaml \
 | Option | Default | Meaning |
 |---|---|---|
 | `--n-per-class` | 100 | examples per class; the file holds twice this |
-| `--chunk-per-class` | 1000 | examples per class generated at once; peak RAM is about 1–2 GB at 1000 |
+| `--chunk-per-class` | 1000 | examples per class generated at once; peak RAM is a few GB at 1000 |
 | `--store-dtype` | float32 | `float64` doubles the size and also whitens in float64 |
 | `--snr-range MIN MAX` | off | rescale to a network optimal SNR uniform in [MIN, MAX]; off keeps physical distances |
 | `--seed` | 150914 | reproducibility; the same seed gives the same file (up to floating-point differences between machines) |
 
-Before writing, the script runs a quick check and saves a plot
-(`whitened_examples.png`). It stops with an error if the data config is
-inconsistent or if any merger falls outside the window.
+The window is set by the data config registered in the script (`sample_length_in_s
+= 2`, `padding_length_in_s = 4`). Before writing, the script runs a quick check
+and saves a plot (`whitened_examples.png`). It stops with an error if the data
+config is inconsistent or if any merger falls outside the window.
 
-**Storage** (2 detectors × 8192 samples):
+**Storage** (2 detectors × 4096 samples):
 
 | Examples (both classes) | float32 | float64 |
 |---|---|---|
-| 10,000 | 0.66 GB | 1.3 GB |
-| 38,000 | 2.5 GB | 5.0 GB |
-| 76,000 | 5.0 GB | 10 GB |
+| 10,000 | 0.33 GB | 0.66 GB |
+| 76,000 | 2.5 GB | 5.0 GB |
+| 150,000 | 4.9 GB | 9.8 GB |
+
+## Relation to the ggwd setup
+
+| | ggwd INI | This dataset |
+|---|---|---|
+| Masses, sky, inclination, phase, polarisation, `chirp_distance` | same priors | same priors |
+| Spins | zero | effectively zero (magnitude < 1e-6: sage's prior rejects a zero-width range) |
+| Approximant | IMRPhenomXPHM, 22 mode only | IMRPhenomPv2; at zero spin the match to XPHM-22 is 0.992–0.999 |
+| Distance | `chirp_distance × (Mc / 1.2188)^(5/6)` | `chirp_distance × (Mc / 1.2)^(5/6)`: distances 1.3 % larger |
+| Window | 2 s, merger at 1 s (H1 arrival time) | 2 s, geocentric `tc` uniform in [0.5, 1.5] s |
+| Noise | real O3 data from HDF files (synthetic aLIGO design if no event time) | synthetic aLIGO design |
+| PSD for whitening | estimated from 16 s of the data itself | exact ASD that coloured the noise |
+| Whitening filter / highpass | 4 s; 20 Hz FIR highpass afterwards | 4 s; 15 Hz highpass inside the filter |
 
 ## Caveats
 
 - **Many signals are weak (physical distances, the default).** With this
   prior and aLIGO design sensitivity, the network optimal SNR of the signals
-  has median about 5 (10–90 % range: 2–10). About 50 % have SNR ≥ 5, 19 %
-  have SNR ≥ 8 and 4 % have SNR ≥ 12. A large fraction of class-1 examples
+  has median about 5 (10–90 % range: 2–10). About 48 % have SNR ≥ 5, 19 %
+  have SNR ≥ 8 and 3 % have SNR ≥ 12. A large fraction of class-1 examples
   are therefore practically indistinguishable from noise. Use `metadata/snr`
   to weight, filter or evaluate by SNR bin, or generate with `--snr-range`
   for training.
@@ -144,10 +165,6 @@ inconsistent or if any merger falls outside the window.
   float32 (sage's `cfg.dtype`), so float64 improves the whitening, not the
   signal model. It's mainly useful for validation; float32 is plenty for
   training.
-- **Long inspirals.** The lightest systems (about 10 + 10 M☉) are longer than
-  the 8 s generation window from 20 Hz. The earliest part of their inspiral
-  wraps to the end of the window and falls mostly in the whitening padding
-  that is discarded.
 - **Shuffling.** Examples are shuffled within each generation chunk
   (`--chunk-per-class` per class), not across the whole file. Shuffle again
   when training.

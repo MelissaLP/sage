@@ -23,10 +23,10 @@ priors:
     min: 1238166018
     max: 1253977218
 
-  tc: # merger time in seconds from the START of the 4 s sample window: 3.0 +- 0.5 s
+  tc: # merger time in seconds from the START of the 2 s sample window: 1.0 +- 0.5 s
     name: uniform
-    min: 2.5
-    max: 3.5
+    min: 0.5
+    max: 1.5
 
   mass1:
     name: uniform
@@ -38,20 +38,20 @@ priors:
     min: 10.0
     max: 50.0
 
-  spin1_a:
+  spin1_a: # non-spinning, as the ggwd INI (sage rejects min == max, so use a ~0 range)
     name: uniform
     min: 0.0
-    max: 0.99
+    max: 1.0e-6
 
   spin1_orientation:
     name: uniform_solidangle
     polar-angle: spin1_polar
     azimuthal-angle: spin1_azimuthal
 
-  spin2_a:
+  spin2_a: # non-spinning, as the ggwd INI (sage rejects min == max, so use a ~0 range)
     name: uniform
     min: 0.0
-    max: 0.99
+    max: 1.0e-6
 
   spin2_orientation:
     name: uniform_solidangle

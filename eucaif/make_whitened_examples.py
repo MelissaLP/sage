@@ -20,9 +20,15 @@ Pipeline
    -- the same convention as sage's ``OptimalSNRRescaler`` augment. The
    optimal SNR (against the ASD used to colour the noise) is always stored.
 4. Whitening: ``FIRWhitening`` (gwpy-equivalent) with the known ASD, cached
-   once. ``fduration / 2`` is removed from each end; by default
-   ``fduration = 2 * padding_length_in_s``, so the output is exactly the
-   ``sample_length_in_s`` window.
+   once, over the whole padded window (default 4 s filter, as ggwd's
+   ``whitening_max_filter_duration``). The whitened series is then cropped
+   to the ``sample_length_in_s`` window, which must lie at least
+   ``fduration / 2`` from either end (the filter's corrupted edges).
+
+The padding should also be long enough that the whole signal fits in the
+generated window: the waveform is periodic in it, so an inspiral longer than
+``tc + padding_length_in_s`` wraps around to the end. (10+10 Msun from 20 Hz
+lasts ~6 s, hence the 4 s padding around a 2 s sample below.)
 
 Timing convention: ``IMRPhenomPv2`` puts the merger at
 ``tc + padding_length_in_s`` inside the padded window, i.e. ``tc`` is the
@@ -115,10 +121,11 @@ class WhitenedExampleGenerator:
         sampled distances. A range rescales each signal to a network optimal
         SNR drawn uniformly from it, and updates the stored distance to
         ``distance / scale``.
-    fduration : float or None
-        FIR whitening filter length in seconds; ``fduration / 2`` is removed
-        from each end of every example. Default ``2 * padding_length_in_s``,
-        so the output is exactly the ``sample_length_in_s`` window.
+    fduration : float
+        FIR whitening filter length in seconds (default 4, as ggwd's
+        ``whitening_max_filter_duration``). Must satisfy
+        ``fduration / 2 <= padding_length_in_s``; the whitened output is
+        cropped to the ``sample_length_in_s`` window.
     highpass : float or None
         Whitening highpass (Hz). Defaults to ``noise_low_frequency_cutoff``.
     dtype : torch.float32 or torch.float64
@@ -135,7 +142,7 @@ class WhitenedExampleGenerator:
         waveform_yaml,
         asd_names=("aLIGOZeroDetHighPower", "aLIGOZeroDetHighPower"),
         snr_range=None,
-        fduration=None,
+        fduration=4.0,
         highpass=None,
         dtype=torch.float32,
         seed=150914,
@@ -164,7 +171,13 @@ class WhitenedExampleGenerator:
                 f"merger at tc + padding_length_in_s, so with this config mergers "
                 f"land outside the window and wrap around."
             )
-        self.fduration = 2.0 * self.padding_s if fduration is None else float(fduration)
+        self.fduration = float(fduration)
+        if self.fduration / 2 > self.padding_s + 1e-9:
+            raise ValueError(
+                f"fduration / 2 = {self.fduration / 2} s exceeds padding_length_in_s = "
+                f"{self.padding_s} s: the whitening-corrupted edges would reach into "
+                f"the sample window."
+            )
         self.dtype = dtype
         self.seed = int(seed)
         self.merger_margin = float(merger_margin)
@@ -195,10 +208,14 @@ class WhitenedExampleGenerator:
             sample_rate=self.fs, fduration=self.fduration, highpass=self.highpass,
             asd=self.asd, seq_len=self.N, dtype=self.dtype,
         )
+        # The whitened series starts at sample `pad` of the padded window;
+        # keep only the sample window [padding, padding + sample_length).
         pad = self.whitener.pad
-        self.L = self.N - 2 * pad
+        start = int(round(self.padding_s * self.fs)) - pad
+        self.L = int(round(self.sample_length_s * self.fs))
+        self._crop = slice(start, start + self.L)
         # time from the start of the sample window (the reference tc uses)
-        self.t = (torch.arange(self.L, dtype=torch.float64) + pad) / self.fs - self.padding_s
+        self.t = torch.arange(self.L, dtype=torch.float64) / self.fs
 
     def _draw_signals(self, n):
         """IMRPhenomPv2 returns batch_size * class_balance signals per call."""
@@ -279,7 +296,7 @@ class WhitenedExampleGenerator:
         # -- assemble and whiten: negatives first, then positives --
         x = noise
         x[n:] += h_td
-        x_w = self.whitener(x)
+        x_w = self.whitener(x)[..., self._crop]
         y = torch.cat([torch.zeros(n), torch.ones(n)]).long()
 
         nan = torch.full((n,), float("nan"), dtype=torch.float64)
@@ -297,7 +314,7 @@ class WhitenedExampleGenerator:
             "tc": tc.float(), "t_merger": t_merger.float(), "t": self.t,
         }
         if keep_signal:
-            sig_w = self.whitener(h_td)
+            sig_w = self.whitener(h_td)[..., self._crop]
             out["signal_whitened"] = sig_w
             # whitened noise is ~unit variance, so sqrt(sum w^2) of the
             # whitened signal alone recovers the optimal SNR
@@ -457,8 +474,10 @@ if __name__ == "__main__":
     p.add_argument("--fig", default="whitened_examples.png")
     args = p.parse_args()
 
-    # Same minimal configs as testing_sage.ipynb, with padding_length_in_s
-    # consistent with padded_length_in_s (4 + 2 * 2 = 8).
+    # Same minimal configs as testing_sage.ipynb, adapted to a 2 s sample
+    # (as ggwd's seconds_before_event + seconds_after_event): 4 s padding on
+    # each side (padded window 2 + 2 * 4 = 10 s) so the longest (10+10 Msun,
+    # ~6 s from 20 Hz) signals fit without wrapping into the sample.
     class DummyCFG:
         export_dir = "."
         batch_size = 10
@@ -472,9 +491,9 @@ if __name__ == "__main__":
         sample_rate = 2048.0
         noise_low_frequency_cutoff = 15.0
         signal_low_frequency_cutoff = 20.0
-        sample_length_in_s = 4.0
-        padded_length_in_s = 8.0
-        padding_length_in_s = 2.0
+        sample_length_in_s = 2.0
+        padded_length_in_s = 10.0
+        padding_length_in_s = 4.0
         delta_f = 1.0 / sample_length_in_s
         corrupted_length = 2.0
 
