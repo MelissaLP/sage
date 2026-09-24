@@ -221,12 +221,14 @@ class FIRWhitening(torch.nn.Module):
     6. Detrend the *whole* input once (single global mean removal, not
        per-frame — unlike ``SelfASDWhitening``), taper its first/last
        ``ntaps // 2`` samples with the same length-``ntaps`` window, and
-       convolve with the FIR kernel via a full linear convolution
-       followed by scipy/gwpy's ``mode="same"`` centering (implemented
-       with a grouped ``conv1d``). Note: gwpy's ``convolve`` switches to
-       a *chunked* overlap-save algorithm for very long inputs purely as
-       a memory optimisation — it computes the identical linear
-       convolution, so it is not separately reproduced here.
+       convolve with the FIR kernel. The convolution is done in the
+       frequency domain as a length-``T`` *circular* convolution
+       (``irfft(rfft(x) * rfft(fir, n=T))``): the wrap-around only
+       touches the first ``ntaps - 1`` samples of the full linear
+       convolution, all of which fall inside the edges stripped in step
+       7, so the kept samples are *identical* to gwpy's linear
+       ``mode="same"`` convolution (whether gwpy took its direct or
+       chunked overlap-save path) at the cost of two length-``T`` FFTs.
     7. Scale the result by ``sqrt(2 / sample_rate)`` and strip
        ``ntaps // 2`` samples from each end — the filter settle-in
        region, matching gwpy's stated ``0.5 * fduration`` corruption
@@ -260,6 +262,15 @@ class FIRWhitening(torch.nn.Module):
         Validity threshold for inverting the ASD — see
         ``SelfASDWhitening``'s ``eps`` docstring for the identical
         rationale (excise, don't amplify, invalid/out-of-band bins).
+    asd : torch.Tensor, optional
+        If given (along with ``seq_len``), precomputes and caches the
+        FIR filter at construction time via ``set_asd`` — useful when
+        your ASD is fixed (e.g. simulated data with a known reference
+        curve), so ``forward`` never has to redesign the filter (a
+        full-length-``T`` ``irfft``) on every call.
+    seq_len : int, optional
+        Required alongside ``asd`` — the fixed input length ``T`` the
+        cached filter is designed for.
     **kwargs
         Forwarded to ``nn.Module.__init__``.
 
@@ -274,10 +285,11 @@ class FIRWhitening(torch.nn.Module):
 
     Input / Output
     --------------
-    forward(x, asd) : (B, D, T) float32, (D, F_in) or (B, D, F_in) float32
+    forward(x, asd=None) : (B, D, T) float32, (D, F_in) or (B, D, F_in) float32
         → (B, D, T - 2 * pad) float32
         ``asd`` is auto-resampled (linearly) onto ``F = T // 2 + 1`` bins
-        if it isn't already on that grid — see ``resample_asd``.
+        if it isn't already on that grid. If omitted, uses the filter
+        cached via ``set_asd``/the constructor's ``asd``/``seq_len``.
     """
 
     def __init__(
@@ -288,6 +300,8 @@ class FIRWhitening(torch.nn.Module):
         fduration: float = 2.0,
         highpass: float = None,
         eps: float = None,
+        asd: torch.Tensor = None,
+        seq_len: int = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -312,6 +326,63 @@ class FIRWhitening(torch.nn.Module):
         # in both truncate_impulse and convolve.
         win_ntaps = self._build_window(window, self.ntaps)
         self.register_buffer("_ntaps_window", win_ntaps)
+
+        # Optional: precompute and cache the FIR filter (and its length-T
+        # spectrum, which is what forward() actually multiplies by) for a
+        # fixed ASD, so forward() doesn't redesign it on every call.
+        self.register_buffer("_cached_fir", None)
+        self.register_buffer("_cached_fir_fd", None)
+        self._cached_seq_len = None
+        if asd is not None:
+            if seq_len is None:
+                raise ValueError(
+                    "seq_len must be given alongside asd, since the FIR "
+                    "filter design depends on the input length T (via the "
+                    "1/duration frequency grid)."
+                )
+            self.set_asd(asd, seq_len)
+
+    def set_asd(self, asd: torch.Tensor, seq_len: int) -> None:
+        """
+        Precompute and cache the FIR whitening filter for a fixed ASD
+        and input length, so ``forward`` doesn't redesign it (including
+        a full-length-``T`` ``irfft``) on every single call.
+
+        Call this once — at construction (via the ``asd``/``seq_len``
+        constructor arguments) or any time afterward — whenever you have
+        a known, fixed ASD (e.g. simulated data with a reference curve
+        like ``aLIGOZeroDetHighPower``) rather than a per-batch one.
+        Call it again if the ASD or sequence length ever changes.
+
+        Parameters
+        ----------
+        asd : torch.Tensor, shape ``(D, F_in)`` or ``(B, D, F_in)``
+            One-sided ASD; auto-resampled onto the ``seq_len``-based
+            grid if it isn't already there (see ``resample_asd``).
+        seq_len : int
+            The (fixed) length ``T`` of the inputs this filter will be
+            applied to. ``forward`` will raise if later called with a
+            different ``T`` and no explicit ``asd=`` override.
+        """
+        asd = asd.to(device=self._ntaps_window.device, dtype=self._ntaps_window.dtype)
+        fir = self._design_fir(asd, seq_len)  # (D, ntaps) or (B, D, ntaps)
+        self._cached_fir = fir
+        self._cached_fir_fd = torch.fft.rfft(fir, n=seq_len, dim=-1)
+        self._cached_seq_len = seq_len
+
+    def _design_fir(self, asd: torch.Tensor, seq_len: int) -> torch.Tensor:
+        """Resample ``asd`` onto the ``seq_len`` grid if needed, invert it
+        and design the length-``ntaps`` FIR filter (steps 1-5)."""
+        expected_bins = seq_len // 2 + 1
+        if asd.shape[-1] != expected_bins:
+            asd = self.resample_asd(asd, expected_bins)
+        transfer = self._invert_asd(asd)  # H = 1 / ASD
+
+        duration = seq_len / self.sample_rate
+        new_df = 1.0 / duration
+        ncorner = int(self.highpass / new_df) if self.highpass else 0
+
+        return self._fir_from_transfer(transfer, ncorner)
 
     @staticmethod
     def _build_window(name: str, n: int) -> torch.Tensor:
@@ -424,7 +495,7 @@ class FIRWhitening(torch.nn.Module):
         out = impulse.clone()
         trunc_start = self.ntaps // 2
         trunc_stop = out.shape[-1] - trunc_start
-        win = self._ntaps_window
+        win = self._ntaps_window.to(device=out.device, dtype=out.dtype)
         out[..., 0:trunc_start] = out[..., 0:trunc_start] * win[trunc_start:self.ntaps]
         out[..., trunc_stop:] = out[..., trunc_stop:] * win[0:trunc_start]
         out[..., trunc_start:trunc_stop] = 0
@@ -483,58 +554,71 @@ class FIRWhitening(torch.nn.Module):
         resampled = F.interpolate(flat, size=n_freq, mode="linear", align_corners=True)
         return resampled.reshape(*orig_shape[:-1], n_freq)
 
-    def forward(self, x: torch.Tensor, asd: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, asd: torch.Tensor = None) -> torch.Tensor:
         """
-        Whiten ``x`` against a supplied ASD via inverse spectrum truncation.
+        Whiten ``x`` via inverse spectrum truncation.
 
         Parameters
         ----------
         x : torch.Tensor, shape ``(B, D, T)``
-        asd : torch.Tensor, shape ``(D, F_in)`` or ``(B, D, F_in)``
+        asd : torch.Tensor, shape ``(D, F_in)`` or ``(B, D, F_in)``, optional
             One-sided ASD on any uniform ``[0, Nyquist]`` grid sharing
-            this module's ``sample_rate``. If ``F_in != T // 2 + 1``, it
-            is automatically resampled (linearly, via ``resample_asd``)
-            onto the grid this forward pass actually needs — no manual
-            pre-resampling required.
+            this module's ``sample_rate``; auto-resampled if needed. If
+            omitted, the filter cached via ``set_asd`` (or the
+            ``asd=``/``seq_len=`` constructor arguments) is used instead
+            — this is the fast path, since no FIR design happens here.
+            Passing ``asd`` explicitly always redesigns the filter for
+            this call only, without touching the cache.
 
         Returns
         -------
         torch.Tensor, shape ``(B, D, T - 2 * pad)``
         """
         B, D, T = x.shape
-        expected_bins = T // 2 + 1
-        asd = asd.to(device=x.device, dtype=x.dtype)
-        if asd.shape[-1] != expected_bins:
-            asd = self.resample_asd(asd, expected_bins)
-        transfer = self._invert_asd(asd)  # H = 1 / ASD
+        if T <= 2 * self.pad:
+            raise ValueError(
+                f"Input length T={T} must exceed 2 * pad = {2 * self.pad} "
+                f"(the samples stripped from the output edges)."
+            )
 
-        duration = T / self.sample_rate
-        new_df = 1.0 / duration
-        ncorner = int(self.highpass / new_df) if self.highpass else 0
-
-        fir = self._fir_from_transfer(transfer, ncorner)  # (D, ntaps) or (B, D, ntaps)
-        if fir.dim() == 2:
-            fir = fir.unsqueeze(0).expand(B, -1, -1)  # shared across batch
+        if asd is not None:
+            asd = asd.to(device=x.device, dtype=x.dtype)
+            fir = self._design_fir(asd, T)  # (D, ntaps) or (B, D, ntaps)
+            fir_fd = torch.fft.rfft(fir, n=T, dim=-1)
+        else:
+            if self._cached_fir_fd is None:
+                raise RuntimeError(
+                    "No asd given and no cached filter set. Either pass "
+                    "asd=... to forward(), or call set_asd(asd, seq_len) "
+                    "once beforehand (or pass asd=/seq_len= at construction)."
+                )
+            if T != self._cached_seq_len:
+                raise ValueError(
+                    f"Input length T={T} doesn't match the cached filter's "
+                    f"seq_len={self._cached_seq_len}. Call "
+                    f"set_asd(asd, {T}) again, or pass asd=... explicitly "
+                    f"for this call."
+                )
+            fir_fd = self._cached_fir_fd.to(device=x.device)
 
         # -- condition the input: single global detrend + edge taper --
         if self.detrend == "constant":
             x = x - x.mean(dim=-1, keepdim=True)
         pad = self.pad
+        win = self._ntaps_window.to(device=x.device, dtype=x.dtype)
         x = x.clone()
-        x[..., :pad] = x[..., :pad] * self._ntaps_window[:pad]
-        x[..., -pad:] = x[..., -pad:] * self._ntaps_window[-pad:]
+        x[..., :pad] = x[..., :pad] * win[:pad]
+        x[..., -pad:] = x[..., -pad:] * win[-pad:]
 
-        # -- full linear convolution via grouped conv1d, then scipy's
-        # mode="same" centering (mathematically identical to gwpy's
-        # convolve, whether or not IT took the chunked overlap-save path) --
-        kernel = torch.flip(fir, dims=[-1])  # conv1d is cross-correlation
-        x_flat = x.reshape(1, B * D, T)
-        kernel_flat = kernel.reshape(B * D, 1, self.ntaps)
-        full = F.conv1d(x_flat, kernel_flat, padding=self.ntaps - 1, groups=B * D)
-        full = full.reshape(B, D, -1)  # length T + ntaps - 1
+        # -- convolution as a length-T circular convolution in the FD.
+        # The full linear convolution has length T + ntaps - 1; wrapping
+        # it to length T only adds its tail onto samples [0, ntaps - 1).
+        # gwpy keeps full[start + pad : start + T - pad] with
+        # start = (ntaps - 1) // 2 (scipy "same" centering), i.e.
+        # full[ntaps - 1 : T - 1] -- entirely clear of the wrapped region,
+        # so this is exact, not an approximation. (fir_fd broadcasts over
+        # B when it is (D, F)). --
+        conv = torch.fft.irfft(torch.fft.rfft(x, dim=-1) * fir_fd, n=T, dim=-1)
 
-        start = (self.ntaps - 1) // 2
-        conv = full[..., start:start + T]  # scipy "same"-mode centering
-
-        out = conv * math.sqrt(2.0 / self.sample_rate)
-        return out[..., pad:T - pad]
+        out = conv[..., self.ntaps - 1:T - 1] * math.sqrt(2.0 / self.sample_rate)
+        return out.to(dtype=x.dtype)
