@@ -12,9 +12,13 @@ Pipeline
    domain, in sage's ``rfft(norm="forward")`` convention (LAL's h(f) times
    df). It is brought to the time domain with
    ``irfft(hf, n=N, norm="forward")`` before being added to the noise.
-3. Optional SNR rescaling: each signal is scaled to a network optimal SNR
-   drawn uniformly from ``snr_range``, computed against the same ASD used to
-   colour the noise.
+3. Signal amplitude: by default the physical amplitude implied by the
+   sampled luminosity distance is kept (as ``IMRPhenomPv2`` does without an
+   ``augment``). Optionally (``snr_range``) each signal is instead rescaled to
+   a network optimal SNR drawn uniformly from that range, and its distance is
+   updated to ``distance / scale`` so amplitude and distance stay consistent
+   -- the same convention as sage's ``OptimalSNRRescaler`` augment. The
+   optimal SNR (against the ASD used to colour the noise) is always stored.
 4. Whitening: ``FIRWhitening`` (gwpy-equivalent) with the known ASD, cached
    once. ``fduration / 2`` is removed from each end; by default
    ``fduration = 2 * padding_length_in_s``, so the output is exactly the
@@ -107,8 +111,10 @@ class WhitenedExampleGenerator:
     asd_names : sequence of str
         One analytic ASD per detector (see ``sage.data.noise.available_asds``).
     snr_range : (float, float) or None
-        Network optimal SNR range to rescale signals to. ``None`` keeps the
-        amplitudes implied by the sampled distances.
+        ``None`` (default) keeps the physical amplitudes implied by the
+        sampled distances. A range rescales each signal to a network optimal
+        SNR drawn uniformly from it, and updates the stored distance to
+        ``distance / scale``.
     fduration : float or None
         FIR whitening filter length in seconds; ``fduration / 2`` is removed
         from each end of every example. Default ``2 * padding_length_in_s``,
@@ -128,7 +134,7 @@ class WhitenedExampleGenerator:
         self,
         waveform_yaml,
         asd_names=("aLIGOZeroDetHighPower", "aLIGOZeroDetHighPower"),
-        snr_range=(8.0, 20.0),
+        snr_range=None,
         fduration=None,
         highpass=None,
         dtype=torch.float32,
@@ -168,7 +174,7 @@ class WhitenedExampleGenerator:
         self.projection = _RecordingProjection()
         self.signal_sampler = IMRPhenomPv2(self.param_sampler, self.projection)
         pidx = self.param_sampler.param_index
-        self._cols = {k: pidx[k] for k in ("tc", "mchirp", "ra", "dec")}
+        self._cols = {k: pidx[k] for k in ("tc", "mchirp", "ra", "dec", "distance")}
 
         self.window_s = float(self.signal_sampler.sample_length_in_s)  # padded_length_in_s
         self.N = int(round(self.window_s * self.fs))
@@ -217,8 +223,8 @@ class WhitenedExampleGenerator:
             x          : (2n, D, L) whitened strain, negatives first
             y          : (2n,) labels, 0 = noise, 1 = signal + noise
             metadata   : dict of (2n,) float64 tensors, keys METADATA_FIELDS
-                         plus "gmst" (physical units; NaN for negatives
-                         except "class")
+                         plus "gmst" and "distance" (physical units; NaN for
+                         negatives except "class")
             targets    : (n, 5) standardised targets as returned by the
                          sampler (positives only), same order as metadata
             snr, snr_det : (n,), (n, D) optimal SNRs of the injected signals
@@ -232,6 +238,7 @@ class WhitenedExampleGenerator:
         torch.manual_seed(int(noise_seed))
         hf, targets, theta, gmst = self._draw_signals(n)
         tc = theta[:, self._cols["tc"]].double()
+        distance = theta[:, self._cols["distance"]].double()
 
         # -- noise (TD), one independent realisation per example --
         noise = sample_synthetic_noise(
@@ -248,7 +255,10 @@ class WhitenedExampleGenerator:
             gen = torch.Generator().manual_seed(int(noise_seed) + 1)
             target_snr = torch.empty(n, dtype=torch.float64).uniform_(
                 *self.snr_range, generator=gen)
-            hf = hf * (target_snr / snr).to(torch.float32)[:, None, None]
+            scale = target_snr / snr
+            hf = hf * scale.to(torch.float32)[:, None, None]
+            # strain ~ 1 / distance (same convention as OptimalSNRRescaler)
+            distance = distance / scale
             snr_det, snr = optimal_snr(hf, self.asd_grid, self.df, self.f_low_signal)
 
         h_td = torch.fft.irfft(hf.to(torch.complex128), n=self.N, dim=-1, norm="forward")
@@ -278,6 +288,7 @@ class WhitenedExampleGenerator:
             for k in ("tc", "mchirp", "ra", "dec")
         }
         metadata["gmst"] = torch.cat([nan, gmst.double()])
+        metadata["distance"] = torch.cat([nan, distance])
         metadata["class"] = y.double()
 
         out = {
@@ -319,7 +330,10 @@ class WhitenedExampleGenerator:
             "approximant": "IMRPhenomPv2",
             "projection": "ConstantProjection (uniformly random GMST per signal, stored in metadata/gmst)",
             "signal_low_frequency_cutoff": self.f_low_signal,
-            "snr_range": np.array(self.snr_range if self.snr_range is not None else [-1.0, -1.0]),
+            "snr_rescaling": (
+                f"uniform network optimal SNR in {list(self.snr_range)}; distance = distance / scale"
+                if self.snr_range is not None else "none (physical distances)"
+            ),
             "snr_definition": "network optimal SNR against the colouring ASD",
             "tc_reference": "seconds from the start of the stored window",
             "waveform_prior_yaml": Path(self.waveform_yaml).read_text(),
@@ -359,7 +373,7 @@ def write_dataset(
         dmeta = {
             k: f.create_dataset(f"metadata/{k}", shape=(n_total,),
                                 dtype="int8" if k == "class" else "float64")
-            for k in METADATA_FIELDS + ["gmst"]
+            for k in METADATA_FIELDS + ["gmst", "distance"]
         }
         dsnr = f.create_dataset("metadata/snr", shape=(n_total,), dtype="float32")
         dsnr_det = f.create_dataset("metadata/snr_det", shape=(n_total, D), dtype="float32")
@@ -375,7 +389,7 @@ def write_dataset(
             order = rng.permutation(2 * n) if shuffle else np.arange(2 * n)
             sl = slice(written, written + 2 * n)
             dx[sl] = data["x"].numpy().astype(store_dtype)[order]
-            for k in METADATA_FIELDS + ["gmst"]:
+            for k in METADATA_FIELDS + ["gmst", "distance"]:
                 dmeta[k][sl] = data["metadata"][k].numpy()[order]
             dsnr[sl] = np.concatenate(
                 [np.full(n, np.nan, np.float32), data["snr"].numpy()])[order]
@@ -436,8 +450,9 @@ if __name__ == "__main__":
                    help="HDF5 output path; if omitted, only a check + plot is run")
     p.add_argument("--store-dtype", default="float32", choices=["float32", "float64"],
                    help="dtype of x on disk; float64 also whitens in float64")
-    p.add_argument("--snr-min", type=float, default=8.0)
-    p.add_argument("--snr-max", type=float, default=20.0)
+    p.add_argument("--snr-range", type=float, nargs=2, default=None, metavar=("MIN", "MAX"),
+                   help="rescale signals to a network optimal SNR uniform in [MIN, MAX] "
+                        "(distance updated accordingly); default: physical distances")
     p.add_argument("--seed", type=int, default=150914)
     p.add_argument("--fig", default="whitened_examples.png")
     args = p.parse_args()
@@ -466,7 +481,7 @@ if __name__ == "__main__":
     register_configs(DummyCFG(), DummyDataCFG())
 
     gen = WhitenedExampleGenerator(
-        args.waveform_yaml, snr_range=(args.snr_min, args.snr_max), seed=args.seed,
+        args.waveform_yaml, snr_range=args.snr_range, seed=args.seed,
         dtype=torch.float64 if args.store_dtype == "float64" else torch.float32,
     )
 
@@ -479,6 +494,10 @@ if __name__ == "__main__":
     print(f"whitened negatives std = {neg_std:.3f} (expect ~1)")
     print(f"tc {data['tc'].min():.2f}..{data['tc'].max():.2f} s; merger - tc: "
           f"{dt.min() * 1e3:.0f}..{dt.max() * 1e3:.0f} ms")
+    q = torch.quantile(data["snr"], torch.tensor([0.1, 0.5, 0.9]))
+    print(f"network optimal SNR: min {data['snr'].min():.1f}, 10/50/90% "
+          f"{q[0]:.1f}/{q[1]:.1f}/{q[2]:.1f}, max {data['snr'].max():.1f}; "
+          f"fraction >= 8: {(data['snr'] >= 8).float().mean():.2f}")
     print(f"SNR recovered from whitened signal / optimal = "
           f"{(data['snr_from_whitened'] / data['snr']).mean():.3f} (expect ~1)")
     plot_examples(data).savefig(args.fig, dpi=120)
