@@ -36,7 +36,7 @@ Usage from the notebook, after ``register_configs(...)``::
 Writing a dataset from the command line (registers the notebook's configs)::
 
     python make_whitened_examples.py sage_eucaif_waveform.yaml \\
-        --n-per-class 25000 --out eucaif_whitened.h5 --store-dtype float16
+        --n-per-class 25000 --out eucaif_whitened.h5 [--store-dtype float64]
 """
 import datetime
 import subprocess
@@ -339,7 +339,7 @@ def make_whitened_examples(waveform_yaml, n_per_class=50, seed=150914, **kwargs)
 
 def write_dataset(
     generator, out_path, n_per_class, chunk_per_class=1000,
-    store_dtype="float16", shuffle=True,
+    store_dtype="float32", shuffle=True,
 ):
     """
     Write ``2 * n_per_class`` whitened examples to an HDF5 file, chunk by
@@ -434,7 +434,8 @@ if __name__ == "__main__":
                    help="examples per class generated at once (bounds memory)")
     p.add_argument("--out", default=None,
                    help="HDF5 output path; if omitted, only a check + plot is run")
-    p.add_argument("--store-dtype", default="float16", choices=["float16", "float32"])
+    p.add_argument("--store-dtype", default="float32", choices=["float32", "float64"],
+                   help="dtype of x on disk; float64 also whitens in float64")
     p.add_argument("--snr-min", type=float, default=8.0)
     p.add_argument("--snr-max", type=float, default=20.0)
     p.add_argument("--seed", type=int, default=150914)
@@ -466,6 +467,7 @@ if __name__ == "__main__":
 
     gen = WhitenedExampleGenerator(
         args.waveform_yaml, snr_range=(args.snr_min, args.snr_max), seed=args.seed,
+        dtype=torch.float64 if args.store_dtype == "float64" else torch.float32,
     )
 
     # quick check + plot on a small chunk
@@ -483,7 +485,7 @@ if __name__ == "__main__":
     print(f"saved {args.fig}")
 
     if args.out:
-        bytes_per = gen.D * gen.L * (2 if args.store_dtype == "float16" else 4)
+        bytes_per = gen.D * gen.L * np.dtype(args.store_dtype).itemsize
         print(f"writing {2 * args.n_per_class} examples to {args.out} "
               f"(~{2 * args.n_per_class * bytes_per / 1e9:.2f} GB)")
         write_dataset(gen, args.out, args.n_per_class,

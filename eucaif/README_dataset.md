@@ -13,8 +13,8 @@ IMRPhenomPv2 signal** (class 1). Produced by `make_whitened_examples.py` with
 | Sample rate | 2048 Hz |
 | Stored duration | 4 s per example (8192 samples) |
 | Array shape | `x`: `(N, 2, 8192)` |
-| Storage dtype | float16 by default (float32 optional) |
-| Size per example | 32 KB (float16) / 64 KB (float32) |
+| Storage dtype | float32 by default (float64 optional) |
+| Size per example | 64 KB (float32) / 128 KB (float64) |
 | Classes | 50 % noise (0), 50 % signal + noise (1), shuffled |
 | Noise | Stationary Gaussian, coloured by `aLIGOZeroDetHighPower` (both detectors) |
 | Signal model | IMRPhenomPv2 (precessing spins), `ConstantProjection` onto each detector |
@@ -44,7 +44,7 @@ IMRPhenomPv2 signal** (class 1). Produced by `make_whitened_examples.py` with
 ## File layout (HDF5)
 
 ```
-x                   (N, 2, 8192)  float16    whitened strain [example, detector, time]
+x                   (N, 2, 8192)  float32    whitened strain [example, detector, time] (float64 with --store-dtype float64)
 t                   (8192,)       float64    time of each sample, s from window start
 metadata/class      (N,)          int8       0 = noise only, 1 = signal + noise
 metadata/tc         (N,)          float64    merger time, s from window start
@@ -80,7 +80,7 @@ metadata/snr_det    (N, 2)        float32    per-detector optimal SNR (H1, L1)
 import h5py, numpy as np, torch
 
 with h5py.File("eucaif_whitened.h5", "r") as f:
-    x = torch.from_numpy(f["x"][:1000].astype(np.float32))       # (1000, 2, 8192)
+    x = torch.from_numpy(f["x"][:1000])                          # (1000, 2, 8192)
     y = torch.from_numpy(f["metadata/class"][:1000].astype(np.int64))
     meta = {k: f[f"metadata/{k}"][:1000] for k in ["tc", "mchirp", "ra", "dec"]}
     fs = f.attrs["sample_rate"]
@@ -94,14 +94,14 @@ indexes the file.
 
 ```bash
 python make_whitened_examples.py sage_eucaif_waveform.yaml \
-    --n-per-class 25000 --out eucaif_whitened.h5 --store-dtype float16
+    --n-per-class 25000 --out eucaif_whitened.h5
 ```
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--n-per-class` | 100 | examples per class; the file holds twice this |
 | `--chunk-per-class` | 1000 | examples per class generated at once; peak RAM is about 1–2 GB at 1000 |
-| `--store-dtype` | float16 | `float32` doubles the size |
+| `--store-dtype` | float32 | `float64` doubles the size and also whitens in float64 |
 | `--snr-min`, `--snr-max` | 8, 20 | network optimal SNR range |
 | `--seed` | 150914 | reproducibility; the same seed gives the same file (up to floating-point differences between machines) |
 
@@ -111,11 +111,11 @@ inconsistent or if any merger falls outside the window.
 
 **Storage** (2 detectors × 8192 samples):
 
-| Examples (both classes) | float16 | float32 |
+| Examples (both classes) | float32 | float64 |
 |---|---|---|
-| 10,000 | 0.33 GB | 0.66 GB |
-| 50,000 | 1.6 GB | 3.3 GB |
-| 150,000 | 4.9 GB | 9.8 GB |
+| 10,000 | 0.66 GB | 1.3 GB |
+| 38,000 | 2.5 GB | 5.0 GB |
+| 76,000 | 5.0 GB | 10 GB |
 
 ## Caveats
 
@@ -124,8 +124,10 @@ inconsistent or if any merger falls outside the window.
   will be lower.
 - **Idealised whitening.** It uses the exact ASD that coloured the noise. On
   real data the ASD has to be estimated, and the whitening is less perfect.
-- **float16.** It changes values by at most about 0.002 of the noise standard
-  deviation, far below the noise. Convert with `.astype(np.float32)` before
+- **float64.** It whitens and stores in float64, which matches gwpy to about 1e-8
+  instead of 1e-6 for float32. The waveforms themselves are generated in
+  float32 (sage's `cfg.dtype`), so float64 improves the whitening, not the
+  signal model. It's mainly useful for validation; float32 is plenty for
   training.
 - **Long inspirals.** The lightest systems (about 10 + 10 M☉) are longer than
   the 8 s generation window from 20 Hz. The earliest part of their inspiral
