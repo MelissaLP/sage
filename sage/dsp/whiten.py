@@ -180,112 +180,113 @@ class FiducialWhitening(torch.nn.Module):
         return GWBatch(x_td, new_state, freqs=None, coarse_indices=None)
 
 
-
-class TimeSeriesWhitener(torch.nn.Module):
+class FIRWhitening(torch.nn.Module):
     """
-    Whiten a time-domain strain against an ASD estimated from itself.
+    Whiten a time-domain strain via inverse spectrum truncation.
 
-    Unlike a fixed-fiducial whitener, this module has no pre-computed PSD
-    buffer: for every ``forward`` call it (1) estimates a Welch-averaged
-    ASD directly from the input segment, then (2) whitens the *same*
-    segment against that self-estimated ASD using windowed, overlapping
-    FFT frames reconstructed via overlap-add (OLA). This mirrors
-    ``gwpy.timeseries.TimeSeries.whiten`` frame-for-frame, but batched
-    and vectorised across ``(B, D)`` in torch.
+    This reproduces gwpy's *current* ``TimeSeries.whiten()`` — FIR filter
+    design via ``gwpy.signal.filter_design.fir_from_transfer`` followed by
+    ``TimeSeries.convolve`` — which is a structurally different algorithm
+    from the legacy Welch/overlap-add whitener that ``SelfASDWhitening``
+    reproduces. The two share a name in gwpy's history but not a method.
 
-    Pipeline (per sample)
-    ---------------------
-    1. Frame the input into overlapping windows of length ``nfft`` at
-       stride ``nstride = nfft - noverlap`` (``self._frame``).
-    2. Detrend + window every frame and rFFT them **once** (shared
-       between steps 3 and 4 below — no transform is ever computed twice).
-    3. If self-estimating: Welch-average the scaled periodograms of that
-       one rFFT across frames to obtain a PSD, then ``ASD = sqrt(PSD)``
-       (``self._psd_from_Xf``). If an ``asd`` was supplied instead, skip
-       this step entirely.
-    4. Whiten every frame in the frequency domain by ``1 / ASD``
-       (invalid/out-of-band bins excised rather than amplified, see
-       ``eps``), inverse-FFT back to the time domain, and reassemble the
-       full-length signal via a single fused overlap-add
-       (``self._overlap_add``, implemented with ``torch.nn.functional.fold``)
-       — numerically the same accumulation as gwpy's own
-       ``out[i0:i1] += irfft(...)`` loop, just executed as one vectorised,
-       ``torch.compile``-friendly op instead of a Python loop over segments.
+    Pipeline (per sample), mirroring gwpy's
+    ``whiten`` / ``fir_from_transfer`` / ``truncate_transfer`` /
+    ``truncate_impulse`` / ``convolve`` exactly:
 
-    This module does **not** wrap ``forward`` in ``@torch.no_grad()``.
-    Because the ASD is estimated from the very input being whitened, the
-    whole operation (framing → Welch ASD → inverse-ASD multiply →
-    overlap-add) is left differentiable end to end so that gradients can
-    flow back to the raw input if desired. Pass ``detach_asd=True`` to
-    ``forward`` to stop gradients through the ASD estimate only (i.e.
-    treat the ASD as fixed for that call), which is the closer analogue
-    to a fiducial whitener's severed graph.
+    1. Take the supplied ASD and resample it (linearly, if not already
+       on that grid — see ``resample_asd``) onto a grid with resolution
+       ``Δf = sample_rate / T`` (``T`` = input length in samples) — the
+       same grid as a full-length rFFT of the input itself. This is far
+       finer than any Welch segment grid, and is recomputed per call
+       since it depends on ``T``.
+    2. Build the transfer function ``H = 1 / ASD`` (invalid/near-zero
+       bins excised rather than amplified — see ``eps``; gwpy's own code
+       has no such guard and would propagate ``inf``/``nan`` on a
+       literally-zero ASD bin, exactly as diagnosed earlier for
+       zero/out-of-band ASD values).
+    3. Smoothly zero/taper ``H`` (``_truncate_transfer``): hard-zero the
+       first ``ncorner`` bins (``ncorner = int(highpass * T /
+       sample_rate)`` if ``highpass`` is given, else 0), then taper the
+       remainder with a Planck window (``nleft=nright=5``, exactly
+       gwpy's ``truncate_transfer`` / ``gwpy.signal.window.planck``).
+    4. Inverse-FFT the tapered transfer into a length-``T`` impulse
+       response, then keep only the outer ``ntaps // 2`` samples on each
+       end (``_truncate_impulse``, using a fixed length-``ntaps`` window
+       precomputed at construction), zeroing everything in between —
+       exactly gwpy's ``truncate_impulse``.
+    5. Re-center via ``torch.roll`` into a causal length-``ntaps`` FIR
+       kernel (``_fir_from_transfer``) — one filter per detector (and
+       per batch element, if the supplied ASD varies per sample).
+    6. Detrend the *whole* input once (single global mean removal, not
+       per-frame — unlike ``SelfASDWhitening``), taper its first/last
+       ``ntaps // 2`` samples with the same length-``ntaps`` window, and
+       convolve with the FIR kernel via a full linear convolution
+       followed by scipy/gwpy's ``mode="same"`` centering (implemented
+       with a grouped ``conv1d``). Note: gwpy's ``convolve`` switches to
+       a *chunked* overlap-save algorithm for very long inputs purely as
+       a memory optimisation — it computes the identical linear
+       convolution, so it is not separately reproduced here.
+    7. Scale the result by ``sqrt(2 / sample_rate)`` and strip
+       ``ntaps // 2`` samples from each end — the filter settle-in
+       region, matching gwpy's stated ``0.5 * fduration`` corruption
+       exactly.
+
+    This module currently supports only an externally supplied ASD
+    (``forward(x, asd=...)``). gwpy's own default self-estimation inside
+    ``whiten()`` uses a *median*-averaged periodogram (not a mean/Welch
+    average) with a specific bias-correction factor — a separate,
+    non-trivial addition not implemented here.
 
     Parameters
     ----------
-    fftlength : float
-        Length in seconds of each Welch/whitening segment.
     sample_rate : float
         Sample rate of the input time series, in Hz.
-    overlap : float, optional, default: 0.0
-        Overlap in seconds between neighbouring segments.
     window : str, optional, default: "hann"
-        Name of a window available via ``torch.<window>_window``
-        (e.g. ``"hann"``, ``"hamming"``), or ``"boxcar"`` for no window.
+        Window name, built with the *periodic* (``fftbins=True``)
+        convention that ``scipy.signal.get_window`` (and hence gwpy)
+        uses by default — note this differs from the symmetric
+        convention ``SelfASDWhitening`` uses.
     detrend : {"constant", None}, optional, default: "constant"
-        Per-frame detrending applied before windowing. Only mean removal
-        is currently supported; anything else raises ``NotImplementedError``.
-    corrupted_len : int, optional
-        Number of samples to strip from each end of the reconstructed
-        output to remove edge effects from the finite-length whitening
-        filter (the first/last frames only have one-sided overlap
-        support). Defaults to ``nfft // 2``, the standard half-filter-
-        length convention.
+        Detrending applied once to the *whole* input before convolving
+        (not per-frame, unlike ``SelfASDWhitening``). Only mean removal
+        is supported.
+    fduration : float, optional, default: 2.0
+        Duration in seconds of the FIR whitening filter.
+        ``ntaps = fduration * sample_rate`` must be even.
+    highpass : float, optional
+        Highpass corner frequency in Hz. ``None`` disables highpassing.
     eps : float, optional
-        Validity threshold applied to any ASD (self-estimated or
-        externally supplied) before inverting it. Bins with
-        ``asd <= eps`` are treated as *out of band* (e.g. a literal 0 at
-        DC, or a PSD that is only defined over some analysis band and
-        zero-padded elsewhere) and are excised — given ``invasd = 0`` —
-        rather than divided, since dividing by a near-zero value would
-        instead hugely *amplify* whatever signal power happens to sit at
-        that frequency, which is almost never what you want and can
-        blow up into ``inf``/``nan`` once summed across segments in the
-        overlap-add. Defaults to ``torch.finfo(dtype).tiny`` at call
-        time if left as ``None``, which only excises exact zeros/
-        negatives; pass something larger (e.g. matching your ASD's
-        analysis-band cutoff) if your "zero" region isn't exactly zero.
+        Validity threshold for inverting the ASD — see
+        ``SelfASDWhitening``'s ``eps`` docstring for the identical
+        rationale (excise, don't amplify, invalid/out-of-band bins).
     **kwargs
         Forwarded to ``nn.Module.__init__``.
 
     Attributes
     ----------
-    window : torch.Tensor, shape ``(nfft,)``
-        Analysis/synthesis window (registered buffer).
-    nfft : int
-        Samples per segment, ``round(fftlength * sample_rate)``.
-    noverlap : int
-        Samples of overlap between segments, ``round(overlap * sample_rate)``.
-    nstride : int
-        Hop size between segment starts, ``nfft - noverlap``.
-    corrupted_len : int
-        Number of samples removed from each end of the OLA output.
+    ntaps : int
+        Number of taps in the FIR whitening filter,
+        ``round(fduration * sample_rate)``.
+    pad : int
+        ``ntaps // 2`` — samples tapered at each input edge before
+        convolving, and stripped from each output edge afterward.
 
     Input / Output
     --------------
-    forward(x) : (B, D, T) float32 → (B, D, T_valid) float32
-        where ``T_valid = nsteps * nstride + noverlap - 2 * corrupted_len``
-        and ``nsteps = 1 + (T - nfft) // nstride``.
+    forward(x, asd) : (B, D, T) float32, (D, F_in) or (B, D, F_in) float32
+        → (B, D, T - 2 * pad) float32
+        ``asd`` is auto-resampled (linearly) onto ``F = T // 2 + 1`` bins
+        if it isn't already on that grid — see ``resample_asd``.
     """
 
     def __init__(
         self,
-        fftlength: float,
         sample_rate: float,
-        overlap: float = 0.0,
         window: str = "hann",
         detrend: str = "constant",
-        corrupted_len: int = None,
+        fduration: float = 2.0,
+        highpass: float = None,
         eps: float = None,
         **kwargs,
     ):
@@ -297,72 +298,46 @@ class TimeSeriesWhitener(torch.nn.Module):
             )
         self.detrend = detrend
         self.eps = eps
-
         self.sample_rate = sample_rate
-        self.nfft = int(round(fftlength * sample_rate))
-        self.noverlap = int(round(overlap * sample_rate))
-        self.nstride = self.nfft - self.noverlap
+        self.highpass = highpass
 
-        if self.nstride <= 0:
-            raise ValueError("overlap must be smaller than fftlength.")
+        self.ntaps = int(round(fduration * sample_rate))
+        if self.ntaps % 2 != 0:
+            raise ValueError("fduration * sample_rate must be even (ntaps).")
+        self.pad = self.ntaps // 2  # == ceil(ntaps / 2) since ntaps is even
 
-        self.corrupted_len = (
-            self.nfft // 2 if corrupted_len is None else int(corrupted_len)
-        )
-
-        win = self._build_window(window, self.nfft)
-        # Registered as a buffer for device/dtype/compile friendliness.
-        self.register_buffer("window", win)
-
-        # Welch one-sided PSD scale factor: 2 / (fs * sum(window**2)),
-        # with DC/Nyquist bins *not* doubled (handled in _welch_asd).
-        scale = 1.0 / (self.sample_rate * torch.sum(win**2))
-        self.register_buffer("_psd_scale", scale)
+        # Length-ntaps window, PERIODIC convention (scipy/gwpy default),
+        # reused for both _truncate_impulse and the input edge-taper in
+        # forward -- exactly as gwpy reuses get_window(window, fir.size)
+        # in both truncate_impulse and convolve.
+        win_ntaps = self._build_window(window, self.ntaps)
+        self.register_buffer("_ntaps_window", win_ntaps)
 
     @staticmethod
-    def _build_window(name: str, nfft: int) -> torch.Tensor:
-        """Build a 1-D analysis window by name."""
+    def _build_window(name: str, n: int) -> torch.Tensor:
+        """Build a 1-D window with the PERIODIC convention (matches
+        scipy.signal.get_window's default fftbins=True), not the
+        symmetric convention used elsewhere."""
         if name in (None, "boxcar", "rectangular"):
-            return torch.ones(nfft)
+            return torch.ones(n)
         try:
             window_fn = getattr(torch, f"{name}_window")
         except AttributeError as exc:
             raise ValueError(f"Unsupported window {name!r}.") from exc
-        return window_fn(nfft, periodic=False)
-
-    def _frame(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Slice ``x`` into overlapping frames.
-
-        Parameters
-        ----------
-        x : torch.Tensor, shape ``(B, D, T)``
-
-        Returns
-        -------
-        torch.Tensor, shape ``(B, D, nsteps, nfft)``
-        """
-        return x.unfold(-1, self.nfft, self.nstride)
-
-    def _detrend(self, frames: torch.Tensor) -> torch.Tensor:
-        """Remove the per-frame mean (only supported detrend mode)."""
-        if self.detrend == "constant":
-            return frames - frames.mean(dim=-1, keepdim=True)
-        return frames
+        return window_fn(n, periodic=True)
 
     def _invert_asd(self, asd: torch.Tensor) -> torch.Tensor:
         """
         Invert an ASD, excising (rather than amplifying) invalid bins.
 
-        Bins with ``asd <= self.eps`` are treated as out of band and get
-        ``invasd = 0``; all other bins get the ordinary ``1 / asd``. See
-        the ``eps`` parameter docstring for why this is preferred over
-        clamping the ASD to a small floor before dividing.
+        Deviates deliberately from gwpy's raw ``1 / asd.value`` (which
+        has no such guard): a literal 0 or negative ASD bin would
+        otherwise produce ``inf``, which the subsequent ``irfft``
+        spreads into ``nan`` across the whole impulse response.
 
         Parameters
         ----------
         asd : torch.Tensor
-            One-sided ASD, any shape.
 
         Returns
         -------
@@ -374,87 +349,110 @@ class TimeSeriesWhitener(torch.nn.Module):
         invasd[valid] = 1.0 / asd[valid]
         return invasd
 
-    def _psd_from_Xf(self, Xf: torch.Tensor) -> torch.Tensor:
+    @staticmethod
+    def _planck_taper(nsamp: int, nleft: int, nright: int, device, dtype) -> torch.Tensor:
         """
-        Welch-average an already-computed rFFT into a one-sided PSD.
-
-        Split out from the old ``_welch_asd`` so ``forward`` can compute
-        the windowed ``rfft`` exactly once and reuse it both for
-        self-estimating the ASD and for the actual whitening multiply,
-        instead of transforming the same frames twice.
+        Vectorised reproduction of ``gwpy.signal.window.planck``.
 
         Parameters
         ----------
-        Xf : torch.Tensor, shape ``(B, D, nsteps, F)``
-            rFFT of detrended, windowed frames.
+        nsamp : int
+            Length of the output window.
+        nleft, nright : int
+            Number of samples tapered at the left/right ends.
 
         Returns
         -------
-        torch.Tensor, shape ``(B, D, F)``
+        torch.Tensor, shape ``(nsamp,)``
         """
-        periodogram = self._psd_scale * Xf.abs() ** 2
-        # One-sided doubling of all bins except DC and (if nfft even) Nyquist.
-        periodogram[..., 1:-1] = periodogram[..., 1:-1] * 2.0
-        return periodogram.mean(dim=-2)  # average over segments -> (B, D, F)
+        w = torch.ones(nsamp, device=device, dtype=dtype)
+        if nleft:
+            w[0] = 0.0
+            if nleft > 1:
+                k = torch.arange(1, nleft, device=device, dtype=dtype)
+                zleft = nleft * (1.0 / k + 1.0 / (k - nleft))
+                w[1:nleft] = w[1:nleft] * torch.sigmoid(-zleft)
+        if nright:
+            w[nsamp - 1] = 0.0
+            if nright > 1:
+                k = torch.arange(1, nright, device=device, dtype=dtype)
+                zright = -nright * (1.0 / (k - nright) + 1.0 / k)
+                w[nsamp - nright:nsamp - 1] = (
+                    w[nsamp - nright:nsamp - 1] * torch.sigmoid(-zright)
+                )
+        return w
 
-    def _overlap_add(self, frames: torch.Tensor, out_len: int) -> torch.Tensor:
+    def _truncate_transfer(self, transfer: torch.Tensor, ncorner: int) -> torch.Tensor:
         """
-        Reassemble whitened frames into a full-length signal via OLA.
-
-        Uses ``torch.nn.functional.fold`` — the exact inverse of
-        ``_frame``'s ``unfold`` — to sum overlapping frames back into
-        place in a single fused op, rather than a Python loop over
-        segments. This produces bit-identical results to a literal
-        ``for i in range(nsteps): out[i0:i1] += frames[i]`` loop (no
-        window-based normalization is applied, matching gwpy's own
-        un-normalized ``+=`` accumulation), but as one vectorised,
-        ``torch.compile``-friendly call instead of ``nsteps`` sequential
-        Python-level slice-adds.
+        Smoothly zero the edges of a (complex) transfer function.
 
         Parameters
         ----------
-        frames : torch.Tensor, shape ``(B, D, nsteps, nfft)``
-            Whitened time-domain frames to be summed back into place.
-        out_len : int
-            Length of the reconstructed output, ``nsteps * nstride + noverlap``.
+        transfer : torch.Tensor, shape ``(..., F)``
+        ncorner : int
+            Number of low-frequency bins to hard-zero.
 
         Returns
         -------
-        torch.Tensor, shape ``(B, D, out_len)``
+        torch.Tensor, same shape as ``transfer``
         """
-        B, D, nsteps, nfft = frames.shape
-        # fold expects (N, C * kernel_size, L_patches); we have C=1, so
-        # C * kernel_size = nfft. Treat the signal as a "1 x out_len" image
-        # and each frame as a "1 x nfft" patch.
-        patches = frames.reshape(B * D, nsteps, nfft).transpose(1, 2)  # (B*D, nfft, nsteps)
-        folded = torch.nn.functional.fold(
-            patches,
-            output_size=(1, out_len),
-            kernel_size=(1, nfft),
-            stride=(1, self.nstride),
-        )  # (B*D, 1, 1, out_len)
-        return folded.reshape(B, D, out_len)
+        nsamp = transfer.shape[-1]
+        out = transfer.clone()
+        if ncorner:
+            out[..., :ncorner] = 0
+        taper = self._planck_taper(
+            nsamp - ncorner, nleft=5, nright=5,
+            device=transfer.device, dtype=transfer.real.dtype,
+        )
+        out[..., ncorner:nsamp] = out[..., ncorner:nsamp] * taper
+        return out
 
-    def remove_corrupted(self, x: torch.Tensor) -> torch.Tensor:
+    def _truncate_impulse(self, impulse: torch.Tensor) -> torch.Tensor:
         """
-        Strip edge samples corrupted by the finite-length whitening filter.
+        Keep only the outer ``ntaps // 2`` samples of an impulse
+        response on each end, tapered, zeroing everything in between —
+        exactly gwpy's ``truncate_impulse``.
 
         Parameters
         ----------
-        x : torch.Tensor, shape ``(B, D, T)``
-            Whitened time-domain strain (full OLA-reconstructed length).
+        impulse : torch.Tensor, shape ``(..., T)``
 
         Returns
         -------
-        torch.Tensor, shape ``(B, D, T - 2 * corrupted_len)``
-            Valid central samples only.
+        torch.Tensor, same shape as ``impulse``
         """
-        if self.corrupted_len == 0:
-            return x
-        T = x.shape[-1]
-        start = self.corrupted_len
-        end = T - self.corrupted_len
-        return x[..., start:end]
+        out = impulse.clone()
+        trunc_start = self.ntaps // 2
+        trunc_stop = out.shape[-1] - trunc_start
+        win = self._ntaps_window
+        out[..., 0:trunc_start] = out[..., 0:trunc_start] * win[trunc_start:self.ntaps]
+        out[..., trunc_stop:] = out[..., trunc_stop:] * win[0:trunc_start]
+        out[..., trunc_start:trunc_stop] = 0
+        return out
+
+    def _fir_from_transfer(self, transfer: torch.Tensor, ncorner: int) -> torch.Tensor:
+        """
+        Design a length-``ntaps`` FIR filter from a transfer function,
+        reproducing gwpy's ``fir_from_transfer`` exactly.
+
+        Parameters
+        ----------
+        transfer : torch.Tensor, shape ``(..., F)``
+            Target transfer function (e.g. ``1 / ASD``), on a grid with
+            ``F = T // 2 + 1`` bins matching the full input length ``T``.
+        ncorner : int
+            Number of low-frequency bins to hard-zero (highpass).
+
+        Returns
+        -------
+        torch.Tensor, shape ``(..., ntaps)``
+        """
+        transfer = self._truncate_transfer(transfer, ncorner)
+        T = 2 * (transfer.shape[-1] - 1)
+        impulse = torch.fft.irfft(transfer, n=T, dim=-1)
+        impulse = self._truncate_impulse(impulse)
+        fir = torch.roll(impulse, shifts=self.ntaps // 2 - 1, dims=-1)[..., : self.ntaps]
+        return fir
 
     @staticmethod
     def resample_asd(asd: torch.Tensor, n_freq: int) -> torch.Tensor:
@@ -462,9 +460,10 @@ class TimeSeriesWhitener(torch.nn.Module):
         Linearly resample an ASD onto a different uniform frequency grid
         spanning the same ``[0, Nyquist]`` range (i.e. same sample rate).
 
-        Use this when your ASD was estimated with a different segment
-        length (hence a different number of frequency bins) than this
-        module's ``nfft``, before passing it to ``forward(x, asd=...)``.
+        Identical to ``SelfASDWhitening.resample_asd``, duplicated here so
+        ``FIRWhitening`` has no cross-class dependency. Called
+        automatically by ``forward`` whenever the supplied ASD isn't
+        already on the ``T // 2 + 1``-bin grid it needs.
 
         Parameters
         ----------
@@ -473,8 +472,7 @@ class TimeSeriesWhitener(torch.nn.Module):
             ``F_in`` bins. Must share the same Nyquist frequency (i.e.
             the same underlying sample rate) as the target grid.
         n_freq : int
-            Number of bins in the output grid, also spanning 0 to
-            Nyquist (typically ``nfft // 2 + 1`` of the target module).
+            Number of bins in the output grid, also spanning 0 to Nyquist.
 
         Returns
         -------
@@ -482,80 +480,61 @@ class TimeSeriesWhitener(torch.nn.Module):
         """
         orig_shape = asd.shape
         flat = asd.reshape(-1, 1, orig_shape[-1])  # (N, 1, F_in)
-        resampled = torch.nn.functional.interpolate(
-            flat, size=n_freq, mode="linear", align_corners=True
-        )
+        resampled = F.interpolate(flat, size=n_freq, mode="linear", align_corners=True)
         return resampled.reshape(*orig_shape[:-1], n_freq)
 
-    def forward(
-        self,
-        x: torch.Tensor,
-        asd: torch.Tensor = None,
-        detach_asd: bool = False,
-    ) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, asd: torch.Tensor) -> torch.Tensor:
         """
-        Whiten ``x`` against either a self-estimated or a supplied ASD.
-
-        This mirrors gwpy's ``asd=`` keyword on ``TimeSeries.whiten``:
-        when ``asd`` is given, the Welch self-estimation step
-        (``self._psd_from_Xf``) is skipped entirely and every frame is
-        whitened against that fixed spectrum instead. Edge samples
-        corrupted by the finite-length whitening filter are then
-        stripped from both ends of the result (``self.remove_corrupted``).
+        Whiten ``x`` against a supplied ASD via inverse spectrum truncation.
 
         Parameters
         ----------
         x : torch.Tensor, shape ``(B, D, T)``
-            Time-domain strain.
-        asd : torch.Tensor, shape ``(D, F)``, optional
-            Externally supplied one-sided amplitude spectral density,
-            with ``F = nfft // 2 + 1`` frequency bins (i.e. matching the
-            rFFT of one ``nfft``-length frame at this module's
-            ``sample_rate``/``fftlength``). When given, this overrides
-            self-estimation and is broadcast across the batch and across
-            every segment. When ``None`` (default), the ASD is estimated
-            from ``x`` itself via Welch's method.
-        detach_asd : bool, optional, default: False
-            If ``True``, stop gradients from flowing back through the
-            ASD used for whitening — whether self-estimated or supplied
-            — treating it as a constant for this call, analogous to a
-            fiducial whitener's severed graph.
+        asd : torch.Tensor, shape ``(D, F_in)`` or ``(B, D, F_in)``
+            One-sided ASD on any uniform ``[0, Nyquist]`` grid sharing
+            this module's ``sample_rate``. If ``F_in != T // 2 + 1``, it
+            is automatically resampled (linearly, via ``resample_asd``)
+            onto the grid this forward pass actually needs — no manual
+            pre-resampling required.
 
         Returns
         -------
-        torch.Tensor, shape ``(B, D, T_valid)``
-            Whitened time series, reconstructed by overlap-add with
-            corrupted edges removed.
+        torch.Tensor, shape ``(B, D, T - 2 * pad)``
         """
-        raw_frames = self._frame(x)  # (B, D, nsteps, nfft)
-        windowed = self._detrend(raw_frames) * self.window
-        Xf = torch.fft.rfft(windowed, dim=-1)  # (B, D, nsteps, F) — computed ONCE
+        B, D, T = x.shape
+        expected_bins = T // 2 + 1
+        asd = asd.to(device=x.device, dtype=x.dtype)
+        if asd.shape[-1] != expected_bins:
+            asd = self.resample_asd(asd, expected_bins)
+        transfer = self._invert_asd(asd)  # H = 1 / ASD
 
-        if asd is not None:
-            expected_bins = self.nfft // 2 + 1
-            if asd.shape[-1] != expected_bins:
-                raise ValueError(
-                    f"asd has {asd.shape[-1]} frequency bins; expected "
-                    f"{expected_bins} for nfft={self.nfft}. If your ASD was "
-                    f"estimated at a different segment length, resample it "
-                    f"first with SelfASDWhitening.resample_asd(asd, "
-                    f"{expected_bins})."
-                )
-            asd = asd.to(device=x.device, dtype=raw_frames.dtype)
-            invasd = self._invert_asd(asd)  # (D, F)
-            invasd = invasd.unsqueeze(0).unsqueeze(-2)  # (1, D, 1, F) -> broadcast (B, D, nsteps, F)
-        else:
-            psd = self._psd_from_Xf(Xf)  # (B, D, F), reusing Xf — no second transform
-            asd = psd.clamp_min(0.0).sqrt()
-            invasd = self._invert_asd(asd).unsqueeze(-2)  # (B, D, 1, F) -> broadcast over nsteps
+        duration = T / self.sample_rate
+        new_df = 1.0 / duration
+        ncorner = int(self.highpass / new_df) if self.highpass else 0
 
-        if detach_asd:
-            invasd = invasd.detach()
+        fir = self._fir_from_transfer(transfer, ncorner)  # (D, ntaps) or (B, D, ntaps)
+        if fir.dim() == 2:
+            fir = fir.unsqueeze(0).expand(B, -1, -1)  # shared across batch
 
-        Xw = Xf * invasd
-        xw_frames = torch.fft.irfft(Xw, n=self.nfft, dim=-1)  # (B, D, nsteps, nfft)
+        # -- condition the input: single global detrend + edge taper --
+        if self.detrend == "constant":
+            x = x - x.mean(dim=-1, keepdim=True)
+        pad = self.pad
+        x = x.clone()
+        x[..., :pad] = x[..., :pad] * self._ntaps_window[:pad]
+        x[..., -pad:] = x[..., -pad:] * self._ntaps_window[-pad:]
 
-        nsteps = raw_frames.shape[-2]
-        out_len = nsteps * self.nstride + self.noverlap
-        x_white = self._overlap_add(xw_frames, out_len)
-        return self.remove_corrupted(x_white)
+        # -- full linear convolution via grouped conv1d, then scipy's
+        # mode="same" centering (mathematically identical to gwpy's
+        # convolve, whether or not IT took the chunked overlap-save path) --
+        kernel = torch.flip(fir, dims=[-1])  # conv1d is cross-correlation
+        x_flat = x.reshape(1, B * D, T)
+        kernel_flat = kernel.reshape(B * D, 1, self.ntaps)
+        full = F.conv1d(x_flat, kernel_flat, padding=self.ntaps - 1, groups=B * D)
+        full = full.reshape(B, D, -1)  # length T + ntaps - 1
+
+        start = (self.ntaps - 1) // 2
+        conv = full[..., start:start + T]  # scipy "same"-mode centering
+
+        out = conv * math.sqrt(2.0 / self.sample_rate)
+        return out[..., pad:T - pad]
