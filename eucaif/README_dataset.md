@@ -20,7 +20,7 @@ The source population and window follow the ggwd / ML-challenge setup; see
 | Classes | 50 % noise (0), 50 % signal + noise (1), shuffled |
 | Noise | Stationary Gaussian, coloured by `aLIGOZeroDetHighPower` (both detectors) |
 | Signal model | IMRPhenomPv2, non-spinning; `ConstantProjection` onto each detector |
-| Signal strength | Physical: set by the sampled luminosity distance (SNR rescaling optional) |
+| Signal strength | Physical: set by the sampled luminosity distance; `chirp_distance` 65–175 Mpc, median network SNR ≈ 10 |
 | Whitening | 4 s FIR inverse-spectrum truncation, equivalent to gwpy 3.0.14 `TimeSeries.whiten` |
 | Merger time | `tc` uniform in [0.5, 1.5] s from the start of the 2 s window |
 
@@ -86,7 +86,7 @@ metadata/snr_det    (N, 2)        float32    per-detector optimal SNR (H1, L1)
 | `ra`, `dec` | Sky position in radians, isotropic prior. |
 | `gmst` | Greenwich Mean Sidereal Time used to project the signal onto the detectors. sage's `ConstantProjection` draws it uniformly at random for each signal instead of deriving it from a GPS time. The detector response depends on `ra` only through the hour angle `gmst - ra`, so **`ra` alone can't be recovered from the data**. To estimate the sky position, regress the hour angle `(gmst - ra) mod 2π` (with `dec`) instead of `ra`. |
 | `class` | Label for detection: 0 for noise, 1 for signal. |
-| `distance` | Luminosity distance in Mpc. Derived by the prior from `chirp_distance` (uniform in volume, 130–350 Mpc) and `mchirp`, so heavier systems are placed farther away; it ranges from about 1 to 7 Gpc. It is updated when `--snr-range` is used. |
+| `distance` | Luminosity distance in Mpc. Derived by the prior from `chirp_distance` (uniform in volume, 65–175 Mpc) and `mchirp`, so heavier systems are placed farther away; it ranges from about 0.5 to 3.4 Gpc (median 1.6 Gpc). It is updated when `--snr-range` is used. |
 | `snr`, `snr_det` | Optimal SNRs of the whole injected signal, not matched-filter SNRs recovered from the noisy data. For light systems part of the inspiral starts before the 2 s window, so the SNR actually contained in the window can be lower (down to about 0.89 × `snr`; the median ratio is 1.00). |
 
 ## Loading
@@ -137,7 +137,8 @@ config is inconsistent or if any merger falls outside the window.
 
 | | ggwd INI | This dataset |
 |---|---|---|
-| Masses, sky, inclination, phase, polarisation, `chirp_distance` | same priors | same priors |
+| Masses, sky, inclination, phase, polarisation | same priors | same priors |
+| `chirp_distance` | uniform in volume, 130–350 Mpc | uniform in volume, **65–175 Mpc** (half, for an easier set: SNR × 2) |
 | Spins | zero | effectively zero (magnitude < 1e-6: sage's prior rejects a zero-width range) |
 | Approximant | IMRPhenomXPHM, 22 mode only | IMRPhenomPv2; at zero spin the match to XPHM-22 is 0.992–0.999 |
 | Distance | `chirp_distance × (Mc / 1.2188)^(5/6)` | `chirp_distance × (Mc / 1.2)^(5/6)`: distances 1.3 % larger |
@@ -148,13 +149,14 @@ config is inconsistent or if any merger falls outside the window.
 
 ## Caveats
 
-- **Many signals are weak (physical distances, the default).** With this
-  prior and aLIGO design sensitivity, the network optimal SNR of the signals
-  has median about 5 (10–90 % range: 2–10). About 48 % have SNR ≥ 5, 19 %
-  have SNR ≥ 8 and 3 % have SNR ≥ 12. A large fraction of class-1 examples
-  are therefore practically indistinguishable from noise. Use `metadata/snr`
-  to weight, filter or evaluate by SNR bin, or generate with `--snr-range`
-  for training.
+- **SNR distribution.** Distances are physical, so SNRs follow from the
+  prior. With `chirp_distance` in 65–175 Mpc and aLIGO design sensitivity,
+  the network optimal SNR has median about 10 (10–90 % range: 4–19). About
+  84 % of signals have SNR ≥ 5, 63 % have SNR ≥ 8 and 37 % have SNR ≥ 12. The
+  roughly 16 % below SNR 5 are practically indistinguishable from noise. Use
+  `metadata/snr` to weight, filter or evaluate by SNR bin. The ggwd /
+  ML-challenge range (130–350 Mpc) halves every SNR (median about 5, 19 % at
+  SNR ≥ 8).
 - **Idealised noise.** It is stationary and Gaussian, from one analytic PSD,
   with no glitches, spectral lines or drift. Performance on real detector data
   will be lower.
@@ -168,3 +170,24 @@ config is inconsistent or if any merger falls outside the window.
 - **Shuffling.** Examples are shuffled within each generation chunk
   (`--chunk-per-class` per class), not across the whole file. Shuffle again
   when training.
+
+## Possible future updates: SNR control
+
+The difficulty is currently set only through the distance prior; since SNR
+scales as 1 / distance, scaling the `chirp_distance` range by a factor k
+scales every SNR by 1 / k. For finer control, the generator already
+supports explicit SNR control, which could be made part of the dataset
+definition:
+
+- **`--snr-range MIN MAX`** (already implemented): rescale every signal to a
+  network optimal SNR drawn uniformly from the range, with `distance` updated
+  to `distance / scale` so amplitude and distance stay consistent (sage's
+  `OptimalSNRRescaler` convention). Distances then no longer follow the prior.
+- **Other SNR distributions**, such as sage's `HalfNorm` target-SNR sampler or
+  a power law in SNR, to set the balance of easy and hard examples.
+- **SNR-binned or curriculum datasets**: several files with decreasing
+  distance ranges or SNR ranges, for training from easy to hard and
+  evaluating sensitivity per SNR bin.
+- **In-window SNR** as an extra metadata field, since for light systems part
+  of the inspiral lies before the 2 s window.
+

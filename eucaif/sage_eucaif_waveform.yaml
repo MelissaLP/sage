@@ -72,10 +72,10 @@ priors:
   polarization:
     name: uniform_angle
 
-  chirp_distance:
+  chirp_distance: # half the ggwd/ML-challenge range (130-350 Mpc) for an easier set: median SNR ~10
     name: uniform_radius
-    min: 130.0
-    max: 350.0
+    min: 65.0
+    max: 175.0
 
 constraints:
   - name: mass_order
