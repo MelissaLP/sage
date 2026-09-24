@@ -48,6 +48,8 @@ Writing a dataset from the command line (registers the notebook's configs)::
     python make_whitened_examples.py sage_eucaif_waveform.yaml \\
         --n-per-class 25000 --out eucaif_whitened.h5 [--store-dtype float64]
 """
+import sys
+sys.path.insert(0, '/data/gravwav/lopezm/Projects/EuCAIF/sage/')
 import datetime
 import subprocess
 from pathlib import Path
