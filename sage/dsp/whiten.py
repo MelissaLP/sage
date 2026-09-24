@@ -271,6 +271,15 @@ class FIRWhitening(torch.nn.Module):
     seq_len : int, optional
         Required alongside ``asd`` — the fixed input length ``T`` the
         cached filter is designed for.
+    dtype : {torch.float32, torch.float64}, optional, default: torch.float32
+        Precision of the whole module: filter design, cached filter and
+        the whitening itself. Inputs (``x`` and ``asd``) are cast to it
+        and the output is returned in it. float32 is ~1e-6 (relative)
+        from gwpy's float64 result and the fast choice on GPU; use
+        float64 for bit-level validation against gwpy (~1e-8). Changing
+        it later with ``.to(dtype)`` / ``.double()`` / ``.float()`` is
+        also supported: the cached filter is redesigned in the new
+        precision on the next ``forward``.
     **kwargs
         Forwarded to ``nn.Module.__init__``.
 
@@ -285,8 +294,8 @@ class FIRWhitening(torch.nn.Module):
 
     Input / Output
     --------------
-    forward(x, asd=None) : (B, D, T) float32, (D, F_in) or (B, D, F_in) float32
-        → (B, D, T - 2 * pad) float32
+    forward(x, asd=None) : (B, D, T), (D, F_in) or (B, D, F_in)
+        → (B, D, T - 2 * pad), in the module's ``dtype``
         ``asd`` is auto-resampled (linearly) onto ``F = T // 2 + 1`` bins
         if it isn't already on that grid. If omitted, uses the filter
         cached via ``set_asd``/the constructor's ``asd``/``seq_len``.
@@ -302,6 +311,7 @@ class FIRWhitening(torch.nn.Module):
         eps: float = None,
         asd: torch.Tensor = None,
         seq_len: int = None,
+        dtype: torch.dtype = torch.float32,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -310,6 +320,8 @@ class FIRWhitening(torch.nn.Module):
             raise NotImplementedError(
                 f"detrend={detrend!r} is not supported; only 'constant' or None."
             )
+        if dtype not in (torch.float32, torch.float64):
+            raise ValueError(f"dtype must be torch.float32 or torch.float64, got {dtype}.")
         self.detrend = detrend
         self.eps = eps
         self.sample_rate = sample_rate
@@ -324,15 +336,21 @@ class FIRWhitening(torch.nn.Module):
         # reused for both _truncate_impulse and the input edge-taper in
         # forward -- exactly as gwpy reuses get_window(window, fir.size)
         # in both truncate_impulse and convolve.
-        win_ntaps = self._build_window(window, self.ntaps)
+        win_ntaps = self._build_window(window, self.ntaps).to(dtype)
         self.register_buffer("_ntaps_window", win_ntaps)
 
         # Optional: precompute and cache the FIR filter (and its length-T
         # spectrum, which is what forward() actually multiplies by) for a
         # fixed ASD, so forward() doesn't redesign it on every call.
+        # The spectrum is stored as a REAL view (..., F, 2): Module.to(dtype)
+        # would discard the imaginary part of a complex buffer. The ASD is
+        # kept so the filter can be redesigned in the new precision if the
+        # module's dtype is changed after set_asd.
+        self.register_buffer("_cached_asd", None)
         self.register_buffer("_cached_fir", None)
         self.register_buffer("_cached_fir_fd", None)
         self._cached_seq_len = None
+        self._cached_dtype = None
         if asd is not None:
             if seq_len is None:
                 raise ValueError(
@@ -364,11 +382,13 @@ class FIRWhitening(torch.nn.Module):
             applied to. ``forward`` will raise if later called with a
             different ``T`` and no explicit ``asd=`` override.
         """
-        asd = asd.to(device=self._ntaps_window.device, dtype=self._ntaps_window.dtype)
+        asd = asd.to(device=self._ntaps_window.device, dtype=self.dtype)
         fir = self._design_fir(asd, seq_len)  # (D, ntaps) or (B, D, ntaps)
+        self._cached_asd = asd
         self._cached_fir = fir
-        self._cached_fir_fd = torch.fft.rfft(fir, n=seq_len, dim=-1)
+        self._cached_fir_fd = torch.view_as_real(torch.fft.rfft(fir, n=seq_len, dim=-1))
         self._cached_seq_len = seq_len
+        self._cached_dtype = self.dtype
 
     def _design_fir(self, asd: torch.Tensor, seq_len: int) -> torch.Tensor:
         """Resample ``asd`` onto the ``seq_len`` grid if needed, invert it
@@ -396,6 +416,11 @@ class FIRWhitening(torch.nn.Module):
         except AttributeError as exc:
             raise ValueError(f"Unsupported window {name!r}.") from exc
         return window_fn(n, periodic=True)
+
+    @property
+    def dtype(self) -> torch.dtype:
+        """Working precision; follows ``.to(dtype)``/``.double()``/``.float()``."""
+        return self._ntaps_window.dtype
 
     def _invert_asd(self, asd: torch.Tensor) -> torch.Tensor:
         """
@@ -574,6 +599,9 @@ class FIRWhitening(torch.nn.Module):
         -------
         torch.Tensor, shape ``(B, D, T - 2 * pad)``
         """
+        if self.dtype not in (torch.float32, torch.float64):
+            raise TypeError(f"FIRWhitening supports float32/float64 only, module is {self.dtype}.")
+        x = x.to(dtype=self.dtype)
         B, D, T = x.shape
         if T <= 2 * self.pad:
             raise ValueError(
@@ -582,7 +610,7 @@ class FIRWhitening(torch.nn.Module):
             )
 
         if asd is not None:
-            asd = asd.to(device=x.device, dtype=x.dtype)
+            asd = asd.to(device=x.device, dtype=self.dtype)
             fir = self._design_fir(asd, T)  # (D, ntaps) or (B, D, ntaps)
             fir_fd = torch.fft.rfft(fir, n=T, dim=-1)
         else:
@@ -599,13 +627,17 @@ class FIRWhitening(torch.nn.Module):
                     f"set_asd(asd, {T}) again, or pass asd=... explicitly "
                     f"for this call."
                 )
-            fir_fd = self._cached_fir_fd.to(device=x.device)
+            if self._cached_dtype != self.dtype:
+                # Module precision changed since set_asd: redesign once in
+                # the new precision rather than just casting the old filter.
+                self.set_asd(self._cached_asd, self._cached_seq_len)
+            fir_fd = torch.view_as_complex(self._cached_fir_fd.to(device=x.device))
 
         # -- condition the input: single global detrend + edge taper --
         if self.detrend == "constant":
             x = x - x.mean(dim=-1, keepdim=True)
         pad = self.pad
-        win = self._ntaps_window.to(device=x.device, dtype=x.dtype)
+        win = self._ntaps_window.to(device=x.device)
         x = x.clone()
         x[..., :pad] = x[..., :pad] * win[:pad]
         x[..., -pad:] = x[..., -pad:] * win[-pad:]
@@ -621,4 +653,4 @@ class FIRWhitening(torch.nn.Module):
         conv = torch.fft.irfft(torch.fft.rfft(x, dim=-1) * fir_fd, n=T, dim=-1)
 
         out = conv[..., self.ntaps - 1:T - 1] * math.sqrt(2.0 / self.sample_rate)
-        return out.to(dtype=x.dtype)
+        return out
