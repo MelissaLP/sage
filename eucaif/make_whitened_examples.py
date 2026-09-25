@@ -48,11 +48,16 @@ Writing a dataset from the command line (registers the notebook's configs)::
     python make_whitened_examples.py sage_eucaif_waveform.yaml \\
         --n-per-class 25000 --out eucaif_whitened.h5 [--store-dtype float64]
 """
-import sys
-sys.path.insert(0, '/data/gravwav/lopezm/Projects/EuCAIF/sage/')
 import datetime
+import platform
 import subprocess
+import sys
+from importlib import metadata as _metadata
 from pathlib import Path
+
+# Make the sage checkout this script lives in importable (eucaif/ -> repo root)
+SAGE_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(SAGE_ROOT))
 
 import numpy as np
 import torch
@@ -63,6 +68,34 @@ from sage.data.waveform import ConstantProjection, IMRPhenomPv2, read_from_confi
 from sage.dsp.whiten import FIRWhitening
 
 METADATA_FIELDS = ["tc", "mchirp", "ra", "dec", "class"]
+SAGE_REPOSITORY = "https://github.com/MelissaLP/sage"
+
+
+def _git(*args):
+    try:
+        return subprocess.run(["git", *args], capture_output=True, text=True,
+                              cwd=SAGE_ROOT).stdout.strip()
+    except Exception:
+        return ""
+
+
+def provenance():
+    """Code version and environment, so the dataset can be regenerated."""
+    versions = {}
+    for pkg in ("torch", "numpy", "h5py", "pycbc", "lalsuite", "scipy"):
+        try:
+            versions[pkg] = _metadata.version(pkg)
+        except _metadata.PackageNotFoundError:
+            versions[pkg] = "not installed"
+    return {
+        "sage_repository": SAGE_REPOSITORY,
+        "sage_commit": _git("rev-parse", "HEAD"),
+        # tag (if any) + commit; "-dirty" means uncommitted changes were present
+        "sage_version": _git("describe", "--tags", "--always", "--dirty"),
+        "sage_uncommitted_changes": bool(_git("status", "--porcelain", "--untracked-files=no")),
+        "python_version": platform.python_version(),
+        "package_versions": "; ".join(f"{k}={v}" for k, v in versions.items()),
+    }
 
 
 class _RecordingProjection(ConstantProjection):
@@ -325,13 +358,6 @@ class WhitenedExampleGenerator:
 
     def attrs(self):
         """Dataset-level description, stored as HDF5 attributes."""
-        try:
-            commit = subprocess.run(
-                ["git", "rev-parse", "HEAD"], capture_output=True, text=True,
-                cwd=Path(__file__).resolve().parent,
-            ).stdout.strip()
-        except Exception:
-            commit = ""
         return {
             "detectors": np.array(self.detectors[: self.D], dtype="S"),
             "asd_names": np.array(self.asd_names, dtype="S"),
@@ -357,8 +383,8 @@ class WhitenedExampleGenerator:
             "tc_reference": "seconds from the start of the stored window",
             "waveform_prior_yaml": Path(self.waveform_yaml).read_text(),
             "seed": self.seed,
-            "sage_commit": commit,
             "created_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            **provenance(),
         }
 
 
@@ -396,6 +422,12 @@ def write_dataset(
         }
         dsnr = f.create_dataset("metadata/snr", shape=(n_total,), dtype="float32")
         dsnr_det = f.create_dataset("metadata/snr_det", shape=(n_total, D), dtype="float32")
+        # everything needed to regenerate this exact file
+        f.attrs["generation_command"] = " ".join(
+            [Path(sys.argv[0]).name] + sys.argv[1:]) if sys.argv and sys.argv[0] else ""
+        f.attrs["n_per_class"] = n_per_class
+        f.attrs["chunk_per_class"] = chunk_per_class
+        f.attrs["store_dtype"] = store_dtype
         f.create_dataset("t", data=generator.t.numpy())
         for k, v in generator.attrs().items():
             f.attrs[k] = v
@@ -523,6 +555,12 @@ if __name__ == "__main__":
           f"{(data['snr_from_whitened'] / data['snr']).mean():.3f} (expect ~1)")
     plot_examples(data).savefig(args.fig, dpi=120)
     print(f"saved {args.fig}")
+
+    prov = provenance()
+    print(f"sage {prov['sage_version']} ({prov['sage_repository']})")
+    if prov["sage_uncommitted_changes"]:
+        print("WARNING: the sage checkout has uncommitted changes; the commit stored in "
+              "the file will not reproduce this dataset exactly. Commit first.")
 
     if args.out:
         bytes_per = gen.D * gen.L * np.dtype(args.store_dtype).itemsize

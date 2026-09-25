@@ -133,6 +133,40 @@ config is inconsistent or if any merger falls outside the window.
 | 76,000 | 2.5 GB | 5.0 GB |
 | 150,000 | 4.9 GB | 9.8 GB |
 
+## Reproducibility
+
+The dataset is fully determined by the code version, the prior YAML, the
+command-line options and the seed. All of them are stored in the HDF5 file
+attributes:
+
+| Attribute | Content |
+|---|---|
+| `sage_repository` | `https://github.com/MelissaLP/sage` |
+| `sage_commit` | full commit hash of the sage checkout used |
+| `sage_version` | `git describe` of that checkout: release tag if any, `-dirty` if it had uncommitted changes |
+| `sage_uncommitted_changes` | `True` means the commit alone does not reproduce the file |
+| `generation_command` | exact command line used |
+| `n_per_class`, `chunk_per_class`, `store_dtype`, `seed` | generation options (the noise seed of each chunk depends on `chunk_per_class`) |
+| `waveform_prior_yaml` | full text of the prior YAML |
+| `python_version`, `package_versions` | Python, torch, numpy, h5py, pycbc, lalsuite, scipy versions |
+
+To regenerate the published file:
+
+```bash
+git clone https://github.com/MelissaLP/sage
+cd sage && git checkout <sage_version tag or sage_commit>
+cd eucaif && python <generation_command>      # as stored in the file
+```
+
+With the same code, options, seed and package versions, the output is
+byte-identical. Other hardware or library versions can change the last
+floating-point digits.
+
+The published record should cite a **tagged release** of this repository
+(for example `eucaif-dataset-v1.0`) rather than the `eucaif` branch, which
+keeps moving. Generate the final file from a clean checkout of that tag, so
+`sage_version` in the file is exactly the tag.
+
 ## Relation to the ggwd setup
 
 | | ggwd INI | This dataset |
