@@ -36,6 +36,7 @@ from .white_noise import (
 )
 from .recolour import RecolourPostprocess
 from .glitch_sampler import GlitchOversampledNoiseSampler
+from .glitch_noise import GlitchInjector, add_glitch, lowpass_glitch, rescale_glitch, resample_glitch
 from .lowfar_noise import StartTimeDataset
 
 # NOTE: the hard-negative miner lives in ``sage.data.noise.cma_mae_mining`` and
@@ -52,5 +53,10 @@ __all__ = [
     "WhiteGaussianNoiseSampler",
     "RecolourPostprocess",
     "GlitchOversampledNoiseSampler",
+    "GlitchInjector",
+    "add_glitch",
+    "lowpass_glitch",
+    "rescale_glitch",
+    "resample_glitch",
     "StartTimeDataset",
 ]
