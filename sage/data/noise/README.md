@@ -20,3 +20,5 @@ alike. The SNR doesn't depend on the whitening convention, so the normalisation 
 cancels. What remains is a small difference in glitch shape (different filter lengths and
 PSD smoothing, mostly at low frequencies and near strong lines). Keep glitches away from the
 edges the whitening discards.
+
+Glitch bank: real O3 glitch shapes (7 Gravity Spy classes, 2 s at 4096 Hz) are available as DeepExtractor reconstructions at https://huggingface.co/datasets/tomdooney/deepextractor-glitch-reconstructions.

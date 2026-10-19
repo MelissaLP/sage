@@ -13,6 +13,7 @@ from sage.dsp.heterodyning import (
     make_median_reference_binary,
     residual_chirp_time,
 )
+from sage.dsp.qtransform import QTransform
 
 __all__ = [
     "FrequencyBand",
@@ -26,4 +27,5 @@ __all__ = [
     "compute_reference_phase",
     "make_median_reference_binary",
     "residual_chirp_time",
+    "QTransform",
 ]
