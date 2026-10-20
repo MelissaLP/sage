@@ -170,8 +170,9 @@ class WhitenedExampleGenerator:
     merger_margin : float
         Every merger (peak of |h(t)| in each detector) must lie at least this
         many seconds inside the whitened sample window, else ValueError.
-    glitches : sage.data.noise.GlitchPopulation or None
-        Optional glitches (EuCAIF v2), drawn per example and detector,
+    glitches : sage.data.noise.GlitchPopulation, a list of them, or None
+        Optional glitches (EuCAIF v2), drawn per example and detector by each
+        population independently (class names must differ between them),
         coloured with the same ASD and added before whitening, inside the
         sample window only. ``None`` (default) gives exactly the v1 examples.
     glitch_f_low : float or None
@@ -225,14 +226,20 @@ class WhitenedExampleGenerator:
         self.dtype = dtype
         self.seed = int(seed)
         self.merger_margin = float(merger_margin)
-        self.glitches = glitches
+        if glitches is not None and not isinstance(glitches, (list, tuple)):
+            glitches = [glitches]
+        self.glitches = list(glitches) if glitches is not None else None
         self.glitch_f_low = glitch_f_low
-        if glitches is not None:
-            if list(glitches.detectors) != self.detectors[: len(asd_names)]:
-                raise ValueError(f"glitch detectors {glitches.detectors} != {self.detectors}")
-            if glitches.sample_rate != self.fs:
-                raise ValueError(f"glitch sample rate {glitches.sample_rate} != {self.fs}")
-            self._glitch_params = [k for k in glitches.parameter_names() if k != "snr"]
+        if self.glitches is not None:
+            for pop in self.glitches:
+                if list(pop.detectors) != self.detectors[: len(asd_names)]:
+                    raise ValueError(f"glitch detectors {pop.detectors} != {self.detectors}")
+                if pop.sample_rate != self.fs:
+                    raise ValueError(f"glitch sample rate {pop.sample_rate} != {self.fs}")
+            self.glitch_classes = [c for pop in self.glitches for c in pop.classes]
+            if len(set(self.glitch_classes)) != len(self.glitch_classes):
+                raise ValueError(f"glitch class names must be unique across populations: {self.glitch_classes}")
+            self._glitch_params = sorted({k for pop in self.glitches for k in pop.parameter_names()} - {"snr"})
 
         # -- waveform generator (FD, on its own padded grid) --
         self.param_sampler = read_from_config(self.waveform_yaml, seed=self.seed)
@@ -352,8 +359,11 @@ class WhitenedExampleGenerator:
             # glitches in both classes, only inside the sample window (seconds of the padded window)
             g = torch.Generator().manual_seed(int(noise_seed) + 2)
             window = (self.padding_s, self.padding_s + self.sample_length_s)
-            glitch_td, events = self.glitches.inject(torch.zeros_like(x), self.asd, g,
-                                                     f_low=self.glitch_f_low, window=window)
+            glitch_td = torch.zeros_like(x)
+            events = [[] for _ in range(x.shape[0] * x.shape[1])]
+            for pop in self.glitches:
+                glitch_td, ev = pop.inject(glitch_td, self.asd, g, f_low=self.glitch_f_low, window=window)
+                events = [a + b for a, b in zip(events, ev)]
             x = x + glitch_td
         x_w = self.whitener(x)[..., self._crop]
         y = torch.cat([torch.zeros(n), torch.ones(n)]).long()
@@ -388,7 +398,7 @@ class WhitenedExampleGenerator:
     def _glitch_table(self, events, n_examples):
         """Glitch counts (n, D) and one row per glitch: example, detector and class indices, time
         (s from the start of the sample window, the glitch centre), SNR and generator parameters."""
-        classes = list(self.glitches.classes)
+        classes = self.glitch_classes
         params = self._glitch_params
         rows = {k: [] for k in self.GLITCH_COLUMNS + params}
         counts = np.zeros((n_examples, self.D), dtype=np.int16)
@@ -409,8 +419,8 @@ class WhitenedExampleGenerator:
         extra = {}
         if self.glitches is not None:
             extra = {
-                "glitch_classes": np.array(list(self.glitches.classes), dtype="S"),
-                "glitch_population": repr(self.glitches.config),
+                "glitch_classes": np.array(self.glitch_classes, dtype="S"),
+                "glitch_population": repr([pop.config for pop in self.glitches]),
                 "glitch_f_low": float(self.glitch_f_low) if self.glitch_f_low is not None else -1.0,
             }
         return {

@@ -26,8 +26,15 @@ def test_generator_mixes_noise_bbh_and_glitches():
     assert 0.9 < float(noise.std()) < 1.1
     tab = data["glitch_table"]
     assert len(tab["example"]) == int(data["n_glitches"].sum())
-    assert set(np.unique(tab["class"])) <= {0, 1, 2, 3}          # O3a classes only (McGAN ones have rate 0)
     assert ((tab["time"] >= 0) & (tab["time"] <= 4.0)).all()
+    # O3a classes, then the non-physical McGAN group: exactly one per (example, detector), Blip-like SNR
+    assert gen.glitch_classes == ["Blip", "Tomte", "BlipLowFrequency", "ScatteredLight",
+                                  "Ringdown", "WhiteNoiseBurst", "GaussianBlip"]
+    nonphys = tab["class"] >= 4
+    per_pair = np.zeros((12, 2), dtype=int)
+    np.add.at(per_pair, (tab["example"][nonphys], tab["detector"][nonphys]), 1)
+    assert (per_pair == 1).all()
+    assert ((tab["snr"][nonphys] >= 5) & (tab["snr"][nonphys] <= 200)).all()
 
 
 def test_on_the_fly_reproducible():
@@ -67,3 +74,13 @@ def test_written_file(tmp_path):
         counts = np.bincount(ex, minlength=n)
         np.testing.assert_array_equal(counts, f["n_glitches"][:].sum(1))
         assert f.attrs["dataset_version"] == "eucaif v2" and "glitches:" in f.attrs["eucaif_v2_config"]
+
+
+def test_nonphysical_off_and_config_errors():
+    cfg = load_config(CONFIG)
+    cfg["nonphysical_glitches"]["probability"] = 0.0
+    gen = make_generator(cfg, seed=4)
+    assert gen.glitch_classes == ["Blip", "Tomte", "BlipLowFrequency", "ScatteredLight"]
+    cfg["nonphysical_glitches"].update(probability=1.0, classes=["Koi_Fish"])
+    with pytest.raises(ValueError):
+        make_generator(cfg, seed=4)

@@ -33,6 +33,13 @@ glitches:
   f_low: 15.0                    # Hz, glitch content below is removed before setting its SNR
   # probability: 0 gives v1-like data (no glitches).
 
+nonphysical_glitches:            # McGAN's training shapes: NOT real glitch classes, added on purpose
+  classes: [Ringdown, WhiteNoiseBurst, GaussianBlip]   # from the population file (rate 0 there)
+  probability: 1.0               # fraction of (example, detector) pairs with one of them
+  per_window: [1, 1]             # exactly one when present, a class drawn uniformly
+  snr_like: Blip                 # SNR range and index copied from the Blip (5-200, index 2.3), deliberately
+  # Drawn independently of the O3a glitches above (same f_low); probability: 0 removes them.
+
 qtransform:                      # settings for Q-transform inputs (computed on the GPU at training time)
   qrange: [4, 64]                # Q-scan: the plane with the loudest tile, per example and detector
   frange: [15, 1000]

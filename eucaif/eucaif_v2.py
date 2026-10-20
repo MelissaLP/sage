@@ -89,12 +89,33 @@ def _prior_with_tc(cfg, tmpdir):
     return path
 
 
-def _population(cfg):
+def _populations(cfg):
+    """The O3a glitches, and the non-physical (McGAN) group if configured: two independent populations
+    drawn from the same population file, with disjoint classes."""
     g = cfg["glitches"]
-    pop = yaml.safe_load((cfg["_dir"] / g["population"]).read_text())
-    pop.update(detectors=list(cfg["data"]["detectors"]), sample_rate=float(cfg["data"]["sample_rate"]),
-               glitches_per_segment=list(g["per_window"]), segment_probability=float(g["probability"]))
-    return GlitchPopulation(pop)
+    base = yaml.safe_load((cfg["_dir"] / g["population"]).read_text())
+    common = dict(detectors=list(cfg["data"]["detectors"]), sample_rate=float(cfg["data"]["sample_rate"]))
+    extra = cfg.get("nonphysical_glitches") or {}
+    names = list(extra.get("classes", []))
+    unknown = set(names) - set(base["classes"])
+    if unknown:
+        raise ValueError(f"nonphysical_glitches: classes {sorted(unknown)} not in {g['population']}")
+    physical = {k: v for k, v in base["classes"].items() if k not in names}
+    pops = [GlitchPopulation(dict(base, classes=physical, glitches_per_segment=list(g["per_window"]),
+                                  segment_probability=float(g["probability"]), **common))]
+    if names and float(extra.get("probability", 1.0)) > 0:
+        like = base["classes"][extra["snr_like"]] if extra.get("snr_like") else {}
+        classes = {}
+        for k in names:
+            c = dict(base["classes"][k])
+            c.pop("rate", None)
+            c["weight"] = 1.0                                  # equally likely within the group
+            if like:                                           # deliberately the SNR distribution of snr_like
+                c.update(snr_range=like["snr_range"], snr_index=like["snr_index"])
+            classes[k] = c
+        pops.append(GlitchPopulation(dict(classes=classes, glitches_per_segment=list(extra.get("per_window", [1, 1])),
+                                          segment_probability=float(extra.get("probability", 1.0)), **common)))
+    return pops
 
 
 def make_generator(config, seed=0, device="cpu", dtype=torch.float32, batch_size=64):
@@ -106,7 +127,7 @@ def make_generator(config, seed=0, device="cpu", dtype=torch.float32, batch_size
     gen = WhitenedExampleGenerator(
         _prior_with_tc(cfg, tmp.name), asd_names=d["asd"], snr_range=cfg["signal"].get("snr_range"),
         fduration=float(d["whitening_fduration"]), highpass=d["whitening_highpass"], dtype=dtype,
-        seed=seed, merger_margin=d["q_padding"] + 0.25, glitches=_population(cfg),
+        seed=seed, merger_margin=d["q_padding"] + 0.25, glitches=_populations(cfg),
         glitch_f_low=cfg["glitches"].get("f_low"))
     gen._tmpdir = tmp
     gen.frame_slice = (int(round(d["q_padding"] * gen.fs)),
@@ -268,7 +289,7 @@ def main():
           f"{float(data['snr'].median()):.1f}; examples x detectors with glitches "
           f"{100 * float((data['n_glitches'] > 0).mean()):.0f}%")
     tab = data["glitch_table"]
-    classes = list(gen.glitches.classes)
+    classes = gen.glitch_classes
     print("glitch classes:", dict(zip(*[[classes[c] for c in np.unique(tab["class"])],
                                          np.unique(tab["class"], return_counts=True)[1].tolist()])))
     if args.fig:

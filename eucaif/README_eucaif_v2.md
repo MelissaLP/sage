@@ -14,14 +14,14 @@ h5py, as for v1.
 | | v1 | v2 |
 |---|---|---|
 | Content | noise, or noise + BBH (50 / 50) | the same, plus glitches in both classes |
-| Glitches | none | Blip, Tomte, Blip_Low_Frequency, Scattered_Light (analytic), O3a class mix |
+| Glitches | none | Blip, Tomte, Blip_Low_Frequency, Scattered_Light (analytic), O3a class mix; plus one non-physical (McGAN) glitch per frame and detector |
 | Stored window | 2 s | 4 s: 1 s + **2 s frame** + 1 s, so Q-transforms can be cut to the frame |
 | `tc` | from the window start, in [0.5, 1.5] s | from the stored window start, in [1.5, 2.5] s (the same place in the frame) |
 | Targets | label, BBH parameters, SNR | also the whitened glitches and the whitened BBH alone, per detector |
 | Use | fixed HDF5 file | on the fly for training; fixed HDF5 files for validation / test |
 
-With `glitches.probability: 0` the examples are v1's (the generator reproduces v1 bit for bit with
-glitches off).
+With `glitches.probability: 0` and `nonphysical_glitches.probability: 0` the examples are v1's
+(the generator reproduces v1 bit for bit with glitches off).
 
 ## The config (`eucaif/eucaif_v2.yaml`)
 
@@ -35,6 +35,12 @@ glitches off).
   (example, detector) pairs with glitches (`probability`, 0.5), how many when present
   (`per_window`, 1-3), and their low-frequency cut. Glitches are independent in H1 and L1
   (no coherence), BBH signals are coherent.
+- `nonphysical_glitches`: McGAN's training shapes (ringdown, white-noise burst, Gaussian blip),
+  which are **not real glitch classes** and are added on purpose, as extra varied transients:
+  exactly one per (example, detector) (`per_window: [1, 1]`, `probability: 1.0`), the class drawn
+  uniformly, with the **Blip's SNR distribution** (5-200, index 2.3; `snr_like: Blip`), drawn
+  independently of the O3a glitches. In the glitch table and `glitch_classes` they come after the
+  O3a classes.
 - `qtransform`: Q-scan grid (Q 4-64, 15-1000 Hz, 256 x 256 over the frame) and the Q-planes for
   invertible tiles (5.7 and 45.3).
 
