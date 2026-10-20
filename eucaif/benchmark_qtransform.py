@@ -3,6 +3,7 @@ Benchmark time-frequency transforms on batches of whitened strain:
 
 - SAGE  ``sage.dsp.qtransform.QTransform``      (gwpy-exact Q-scan, Q chosen per series)
 - ml4gw ``ml4gw.transforms.QScan``               (bicubic default and spline; one Q per batch)
+- QTAM  ``qtam.QScanMulti``                      (invertible Q-transform, Q chosen per series)
 - DeepExtractor's STFT                           (``torch.stft``, magnitude + phase, and the
                                                   ``torch.istft`` back to the time domain)
 - gwpy ``TimeSeries.q_transform``                (reference, numpy loop, CPU only)
@@ -22,6 +23,9 @@ Notes:
 - "acc" is the largest difference from gwpy over a few series, relative to the peak (Q-scans
   only, same grid; the STFT is a different transform, so it has no gwpy reference).
 - ml4gw picks one Q for the whole batch; SAGE and gwpy pick one per series.
+- QTAM (``pip install qtam``) is a different, invertible transform: its own frequency rows (the
+  number depends on Q, so its image is not 257 x 257) and no median normalisation, so it has no
+  "acc". Its time axis is set to the same number of columns as the others (``num_time``).
 """
 
 import argparse
@@ -39,6 +43,17 @@ try:
     from ml4gw.transforms import QScan
 except Exception:  # ml4gw needs Python >= 3.11
     QScan = None
+try:
+    # qtam 0.3.1 imports its bundled torch_spline_interpolation_1_0_0 as a top-level module
+    # (and the "full" extra that would provide it is not on PyPI), so put the package's own
+    # folder on the path first
+    import importlib.util
+    import os
+    import sys
+    sys.path.insert(0, os.path.dirname(importlib.util.find_spec("qtam").origin))
+    from qtam import QScanMulti
+except Exception:
+    QScanMulti = None
 try:
     from gwpy.timeseries import TimeSeries
 except Exception:
@@ -108,12 +123,22 @@ def main():
     if QScan is not None:
         QScan(dur, fs, (nf, nt), qrange=list(qr), frange=list(fr))
     t_init_ml4gw = time.perf_counter() - t0
+    qtam_kw = dict(qrange=list(qr), frange=list(fr), logf=True)
+    t0 = time.perf_counter()
+    if QScanMulti is not None:
+        qtam_rows = [len(t.freqs) for t in QScanMulti(dur, fs, (nf, nt), **qtam_kw).transforms]
+    t_init_qtam = time.perf_counter() - t0
     window = torch.hann_window(args.win_length)
 
     print(f"{n} samples ({dur:g} s @ {fs:g} Hz) | image {nf} x {nt} | Q {qr} | f {fr} Hz | "
           f"STFT n_fft={args.n_fft} win={args.win_length} hop={args.hop_length}")
     print(f"torch {torch.__version__} | construction: SAGE {t_init_sage:.2f} s, ml4gw {t_init_ml4gw:.2f} s"
-          f"{'' if QScan else ' | ml4gw not installed'}{'' if TimeSeries else ' | gwpy not installed'}\n")
+          + (f", QTAM {t_init_qtam:.2f} s" if QScanMulti else "")
+          + f"{'' if QScan else ' | ml4gw not installed'}{'' if QScanMulti else ' | qtam not installed'}"
+          + f"{'' if TimeSeries else ' | gwpy not installed'}")
+    if QScanMulti is not None:
+        print(f"QTAM: {len(qtam_rows)} Q-planes, {min(qtam_rows)}-{max(qtam_rows)} frequency rows x {nt} times")
+    print()
 
     # accuracy against gwpy on the common grid (CPU, 4 series)
     acc = {}
@@ -136,6 +161,9 @@ def main():
         for m in ("bicubic", "spline"):
             methods[f"ml4gw QScan {m}"] = (lambda m: lambda d: (lambda q: lambda x: q(x[:, None]))(
                 QScan(dur, fs, (nf, nt), qrange=list(qr), frange=list(fr), interpolation_method=m).to(d)))(m)
+    if QScanMulti is not None:
+        methods["QTAM QScanMulti"] = lambda d: (lambda q: lambda x: q(x[:, None], num_time=nt))(
+            QScanMulti(dur, fs, (nf, nt), device=d, **qtam_kw).to(d))
     stft_kw = dict(n_fft=args.n_fft, hop_length=args.hop_length, win_length=args.win_length)
 
     def stft(d):
