@@ -1,0 +1,95 @@
+# Dense analytic glitches, as DeepExtractor's training data (1-30 glitches of random types per 2 s
+# sample, uniform times, SNR uniform in [1, 250]; deepextractor/generation/generate_timeseries.py).
+# Read by sage.data.noise.GlitchPopulation; same class format as sage_analytic_glitches.yaml, but
+# `glitches_per_segment` replaces the rates: every segment of every detector gets a number of
+# glitches uniform in [low, high], each of a class drawn with probability proportional to `weight`.
+# `snr_index: 0` gives a uniform SNR on `snr_range`.
+#
+# Set up for 4 s frames: every glitch array (`duration`) is at most 3.6 s, so arches are capped at
+# 3.5 s (ArchEnemy's bank goes to 5.5 s: raise `timeperiod` and `duration` for 8 s frames). For
+# DeepExtractor's 2 s frames, drop ScatteredLight (weight 0).
+
+detectors: [L1]                 # any number; each detector gets its own noise and glitches
+sample_rate: 4096.0
+glitches_per_segment: [5, 30]   # per stored window (frame + Q padding), per detector
+
+# Dataset written by eucaif/make_glitch_dataset.py. Coloured Gaussian noise + glitches (coloured
+# with the same ASD, amplitude set by their SNR) is whitened with FIRWhitening, and both the
+# whitened strain and the whitened glitches alone (the target) are stored, over
+#   [q_padding | frame_length | q_padding]
+# The Q-transform is circular (FFT-based), so compute it on the stored window and use the central
+# frame_length (it wraps over ~Q' / (2 f): 0.34 s at 20 Hz for Q = 45). The noise is generated
+# whitening_fduration longer, as FIRWhitening discards fduration / 2 at each end.
+dataset:
+  frame_length: 4.0               # s, the window a network is trained and evaluated on
+  q_padding: 1.0                  # s stored on each side of the frame (covers Q = 45 down to ~10 Hz)
+  whitening_fduration: 2.0        # s, FIR whitening filter length
+  whitening_highpass: 15.0        # Hz
+  asd: [aLIGOZeroDetHighPower]    # one per detector (sage.data.noise.available_asds)
+  glitch_f_low: 10.0              # Hz, glitch content below is removed before setting its SNR
+
+classes:
+
+  Blip:             # GWForge's Blip (Gravity Spy O3a ranges), phase 0 or pi
+    generator: sine_gaussian
+    weight: 1.0
+    f0: [50.0, 500.0]
+    q: [2.0, 6.0]
+    phases: [0.0, 3.141592653589793]
+    snr_range: [5.0, 100.0]
+    snr_index: 0.0
+    duration: 0.5
+
+  Tomte:            # GWForge's Tomte, phase pi
+    generator: sine_gaussian
+    weight: 1.0
+    f0: [30.0, 65.0]
+    q: [4.0, 12.0]
+    phases: [3.141592653589793]
+    snr_range: [5.0, 100.0]
+    snr_index: 0.0
+    duration: 1.0
+
+  SineGaussian:     # McGAN's sine-Gaussian, random phase
+    generator: sine_gaussian
+    weight: 1.0
+    f0: [70.0, 250.0]
+    q: [3.0, 20.0]
+    snr_range: [5.0, 100.0]
+    snr_index: 0.0
+    duration: 1.0
+
+  Ringdown:         # McGAN's ringdown, starts at the injection time
+    generator: ringdown
+    weight: 1.0
+    f0: [70.0, 250.0]
+    q: [9.0, 20.0]
+    snr_range: [5.0, 100.0]
+    snr_index: 0.0
+    duration: 1.0
+
+  WhiteNoiseBurst:  # McGAN's band-passed white noise burst
+    generator: white_noise_burst
+    weight: 1.0
+    tau: [1.0e-4, 1.0e-2]
+    band: [70.0, 250.0]
+    snr_range: [5.0, 100.0]
+    snr_index: 0.0
+    duration: 1.0
+
+  GaussianBlip:     # McGAN's Gaussian pulse
+    generator: gaussian_blip
+    weight: 1.0
+    tau: [0.01, 0.05]
+    snr_range: [5.0, 100.0]
+    snr_index: 0.0
+    duration: 1.0
+
+  ScatteredLight:   # ArchEnemy arch, capped at 3.5 s for 4 s frames
+    generator: scattered_light_arch
+    weight: 0.5
+    fringe_frequency: [20.0, 80.0]
+    timeperiod: [1.8, 3.5]
+    snr_range: [5.0, 100.0]
+    snr_index: 0.0
+    duration: 3.6
