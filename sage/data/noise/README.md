@@ -21,4 +21,14 @@ cancels. What remains is a small difference in glitch shape (different filter le
 PSD smoothing, mostly at low frequencies and near strong lines). Keep glitches away from the
 edges the whitening discards.
 
-Glitch bank: real O3 glitch shapes (7 Gravity Spy classes, 2 s at 4096 Hz) are available as DeepExtractor reconstructions at https://huggingface.co/datasets/tomdooney/deepextractor-glitch-reconstructions.
+## Glitch sources
+
+All three give whitened glitch shapes for `GlitchInjector` (`glitch_noise.py`), which sets their amplitude by SNR.
+
+| Source | SAGE code | Origin |
+|---|---|---|
+| gengli (blips) | `glitch_noise.py` (port of `add_glitch`) | [gengli](https://git.ligo.org/melissa.lopez/gengli) |
+| Real O3 glitches, 7 Gravity Spy classes, 2 s at 4096 Hz | `glitch_bank.py` (`DeepExtractorGlitchBank`; needs `huggingface_hub`) | [DeepExtractor reconstructions](https://huggingface.co/datasets/tomdooney/deepextractor-glitch-reconstructions), CC BY 4.0, Dooney et al., PRD (2026) |
+| Analytic: sine-Gaussian, ringdown, white noise burst, Gaussian blip | `analytic_glitches.py` | [McGANn](https://github.com/jmcginn/McGANn) `cGAN/GAN_training_data.py`, MIT, McGinn et al., [CQG 38 155005 (2021)](https://doi.org/10.1088/1361-6382/ac09cc) |
+
+The differences from each original are listed in the module docstrings.
