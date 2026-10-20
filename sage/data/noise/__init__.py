@@ -46,6 +46,8 @@ from .analytic_glitches import (
     sine_gaussian,
     white_noise_burst,
 )
+from .scattered_light import scattered_light_arch
+from .glitch_population import GlitchPopulation, power_law_snr
 from .lowfar_noise import StartTimeDataset
 
 # NOTE: the hard-negative miner lives in ``sage.data.noise.cma_mae_mining`` and
@@ -75,5 +77,8 @@ __all__ = [
     "ringdown",
     "sine_gaussian",
     "white_noise_burst",
+    "scattered_light_arch",
+    "GlitchPopulation",
+    "power_law_snr",
     "StartTimeDataset",
 ]

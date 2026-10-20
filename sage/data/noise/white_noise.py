@@ -472,7 +472,7 @@ def _spawn_rng(seed, *keys) -> np.random.Generator:
 def _derive_seed(seed, *keys) -> int:
     """Derive a reproducible 64-bit integer seed from ``(seed, *keys)``."""
     ss = np.random.SeedSequence(entropy=seed, spawn_key=tuple(int(k) for k in keys))
-    return int(ss.generate_state(2, dtype=np.uint64)[0] >> 1)  # keep it positive
+    return int(ss.generate_state(2, dtype=np.uint64)[0]) >> 1  # keep it positive (NumPy 1.x: shift a Python int)
 
 
 def _legacy_block(seed_offset: int, block_index: int, sample_rate: float,

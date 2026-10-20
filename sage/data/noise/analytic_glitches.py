@@ -51,9 +51,11 @@ Documentation:
       response (the same gain and phase as McGAN's ``lfilter`` calls), circularly, so there
       is no start-up transient.
 
-    Each generator takes ranges as ``(low, high)`` (drawn uniformly per glitch) or a single
-    number (fixed), a ``torch.Generator`` for reproducibility, and returns (n, L), plus the
-    drawn parameters with ``return_params=True``.
+    Each generator takes ranges as ``(low, high)`` (drawn uniformly per glitch), a single
+    number (fixed) or a tensor of n per-glitch values, a ``torch.Generator`` for reproducibility,
+    and returns (n, L), plus the drawn parameters with ``return_params=True``. The phase ``phi``
+    of ``sine_gaussian`` and ``ringdown`` multiplies a sine: phi = pi / 2 is a cosine (a
+    sine-Gaussian symmetric about t0).
 """
 
 import math
@@ -65,7 +67,12 @@ from torch import Tensor
 
 
 def _uniform(bounds, n: int, generator, dtype) -> Tensor:
-    """n draws from U(low, high) for ``bounds = (low, high)``; a single number is fixed."""
+    """n draws from U(low, high) for ``bounds = (low, high)``; a single number is fixed; a tensor
+    of n values is used as given (per-glitch values, e.g. drawn by a population)."""
+    if isinstance(bounds, Tensor):
+        if bounds.numel() != n:
+            raise ValueError(f"Expected {n} per-glitch values, got {bounds.numel()}")
+        return bounds.reshape(n).to(dtype)
     if isinstance(bounds, (int, float)):
         return torch.full((n,), float(bounds), dtype=dtype)
     low, high = bounds
@@ -95,12 +102,12 @@ def _finish(h, params, dtype, device, return_params):
 
 
 def sine_gaussian(n: int, sample_rate: float, duration: float = 1.0, f0=(70.0, 250.0),
-                  q=(3.0, 20.0), t0=(0.4, 0.6), generator: torch.Generator = None,
+                  q=(3.0, 20.0), t0=(0.4, 0.6), phi=(0.0, 2 * math.pi), generator: torch.Generator = None,
                   dtype=torch.float32, device=None, return_params: bool = False):
     """``n`` sine-Gaussians (McGAN's ``sinegaussian``), shape (n, duration * sample_rate)."""
     work = torch.float64
     f0, q, t0 = (_uniform(b, n, generator, work) for b in (f0, q, t0))
-    phi = _uniform((0.0, 2 * math.pi), n, generator, work)
+    phi = _uniform(phi, n, generator, work)
     tau = quality_factor_to_tau(q, f0)
     t = _time(n, sample_rate, duration, device, work)
     f0_, t0_, tau_, phi_ = (p.to(device).unsqueeze(-1) for p in (f0, t0, tau, phi))
@@ -109,12 +116,12 @@ def sine_gaussian(n: int, sample_rate: float, duration: float = 1.0, f0=(70.0, 2
 
 
 def ringdown(n: int, sample_rate: float, duration: float = 1.0, f0=(70.0, 250.0),
-             q=(9.0, 20.0), t0=(0.4, 0.6), generator: torch.Generator = None,
+             q=(9.0, 20.0), t0=(0.4, 0.6), phi=(0.0, 2 * math.pi), generator: torch.Generator = None,
              dtype=torch.float32, device=None, return_params: bool = False):
     """``n`` damped sinusoids starting at t0 (McGAN's ``ringdown``)."""
     work = torch.float64
     f0, q, t0 = (_uniform(b, n, generator, work) for b in (f0, q, t0))
-    phi = _uniform((0.0, 2 * math.pi), n, generator, work)
+    phi = _uniform(phi, n, generator, work)
     tau = quality_factor_to_tau(q, f0)
     t = _time(n, sample_rate, duration, device, work)
     f0_, t0_, tau_, phi_ = (p.to(device).unsqueeze(-1) for p in (f0, t0, tau, phi))
