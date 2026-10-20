@@ -23,6 +23,9 @@ h5py, as for v1.
 With `glitches.probability: 0` and `nonphysical_glitches.probability: 0` the examples are v1's
 (the generator reproduces v1 bit for bit with glitches off).
 
+Example figure (time series and Q-scans of a noise-only and a BBH example, glitches labelled) and
+timings: `python3 eucaif/example_eucaif_v2.py --timing`.
+
 ## The config (`eucaif/eucaif_v2.yaml`)
 
 - `data`: detectors and ASDs, sample rate (2048 Hz), frame length (2 s), `q_padding` (1 s on each
