@@ -92,10 +92,7 @@ class GlitchDatasetGenerator:
         self.t = torch.arange(self.L, dtype=torch.float64) / self.fs - self.qpad_s
 
         self.classes = list(self.pop.classes)
-        fields = set()
-        for name in self.classes:
-            fields |= set(self.pop.sample(name, 1, torch.Generator().manual_seed(0))[1])
-        self.param_fields = sorted(fields - {"snr"})
+        self.param_fields = [k for k in self.pop.parameter_names() if k != "snr"]
 
     def generate(self, n, chunk_seed):
         """``n`` frames: whitened strain and glitches (n, D, L), glitches per frame (n, D), glitch table."""

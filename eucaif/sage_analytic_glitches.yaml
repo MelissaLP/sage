@@ -1,23 +1,28 @@
-# Analytic glitch population for SAGE, read by sage.data.noise.GlitchPopulation.
-# Modelled on GWForge's blip_tomte.ini (https://github.com/koustavchandra/gwforge,
-# GWForge/glitch/configuration_files/blip_tomte.ini): every entry under `classes` is one glitch
-# class with its rate, parameter ranges and SNR distribution.
+# O3a-calibrated analytic glitch population for SAGE, read by sage.data.noise.GlitchPopulation.
+#
+# Format and calibration method from GWForge (Koustav Chandra et al., MIT,
+# https://github.com/koustavchandra/gwforge: GWForge/glitch/configuration_files/blip_tomte.ini and
+# docs/source/glitch.md). Blip and Tomte are GWForge's classes and ranges; the rates, frequency
+# ranges and SNR indices of every class come, as in GWForge, from the public Gravity Spy O3a tables
+# (Zenodo 5649212, CC BY 4.0; Glanzer et al. 2023), classifications with ml_confidence >= 0.9,
+# divided by the GWOSC O3a DATA time (3116 h at H1, 3321 h at L1). eucaif/gravityspy_o3a_rates.py
+# recomputes them (and the numbers of every other Gravity Spy class).
 #
 # Keys of a class:
 #   generator   analytic generator in sage.data.noise: sine_gaussian, ringdown, white_noise_burst,
 #               gaussian_blip, scattered_light_arch
-#   rate        mean number per hour per detector (Poisson count, uniform times, as GWForge);
-#               a number, or one per detector, e.g. {H1: 1.3, L1: 0.65}
-#   snr_range   optimal SNR against the detector's ASD, drawn from p(snr) ~ snr**-snr_index on
-#   snr_index   snr_range (snr_index 1: log-uniform), as GWForge
-#   phases      optional discrete phases, GWForge's cosine convention:
-#               h ~ cos(2 pi f0 (t - t0) + phase), i.e. 0 and pi are symmetric bursts
-#   duration    length (s) of each generated glitch array; the glitch is centred in it, so the
-#               injection time is the glitch centre (the start, for ringdowns)
-#   parameters  [low, high] (uniform per glitch) or a fixed value, with the generator's own names
+#   rate        mean number per hour per detector (Poisson count, uniform times, as GWForge),
+#               a number or one per detector; in dense mode (glitches_per_segment) the class mix
+#   snr_range   optimal SNR against the detector's ASD, p(snr) ~ snr**-snr_index on snr_range
+#   snr_index   (1: log-uniform, 0: uniform). Gravity Spy's indices are Omicron SNRs above 7.5;
+#               like GWForge, the range extends below and above.
+#   phases      optional discrete phases, GWForge's cosine convention h ~ cos(2 pi f0 (t - t0) + phase)
+#   log_uniform parameters drawn log-uniformly on their range (GWForge draws f0 log-uniformly)
+#   duration    length (s) of each generated glitch array; the glitch is centred in it
+#   parameters  [low, high] or a fixed value, with the generator's own names
 #
-# Rates and ranges for Blip and Tomte are GWForge's (Gravity Spy O3a, see the references there).
-# The other classes have no calibrated rates: the values below are placeholders to set from data.
+# Not modelled: Fast_Scattering (7.6/h at L1, the most common L1 class), Low_Frequency_Burst
+# (5.8/h at H1), Koi_Fish, Whistle, Extremely_Loud: no analytic shape for them here.
 
 detectors: [H1, L1]
 sample_rate: 4096.0
@@ -25,36 +30,65 @@ sample_rate: 4096.0
 classes:
 
   Blip:
-    # Short broadband bursts, O(10) ms (Cabero et al. 2019, arXiv:1901.05093). Gravity Spy O3a:
-    # peak frequency 93-412 Hz at H1, 111-630 Hz at L1; 1.3/h at H1, 0.65/h at L1; SNR index 2.2-2.4.
-    # Symmetric in time, phase 0 or pi (Antiglitch, arXiv:2309.06594).
+    # GWForge's Blip: short broadband bursts, O(10) ms (Cabero et al. 2019, arXiv:1901.05093);
+    # symmetric, phase 0 or pi (Antiglitch, arXiv:2309.06594). Gravity Spy O3a: 1.30/h at H1,
+    # 0.66/h at L1; peak frequency 93-412 Hz at H1, 111-630 Hz at L1; SNR index 2.32.
     generator: sine_gaussian
-    rate: {H1: 1.3, L1: 0.65}
+    rate: {H1: 1.299, L1: 0.655}
     f0: [50.0, 500.0]
     q: [2.0, 6.0]
+    log_uniform: [f0]
     phases: [0.0, 3.141592653589793]
     snr_range: [5.0, 200.0]
     snr_index: 2.3
     duration: 0.5
 
   Tomte:
-    # Triangular bursts of ~0.25 s, most power below 64 Hz (Glanzer et al. 2023, arXiv:2208.12849).
-    # Gravity Spy O3a: peak frequency 32-61 Hz; 6.2/h at L1, 0.22/h at H1; SNR index 2.0-2.4.
-    # Symmetric, phase pi (Antiglitch).
+    # GWForge's Tomte: triangular bursts of ~0.25 s, most power below 64 Hz (Glanzer et al. 2023,
+    # arXiv:2208.12849); symmetric, phase pi. Gravity Spy O3a: 0.22/h at H1, 6.28/h at L1; peak
+    # frequency 32-61 Hz; SNR index 2.39 (GWForge: 2.0-2.4, uses 2.2).
     generator: sine_gaussian
-    rate: {H1: 0.22, L1: 6.2}
+    rate: {H1: 0.223, L1: 6.276}
     f0: [30.0, 65.0]
     q: [4.0, 12.0]
+    log_uniform: [f0]
     phases: [3.141592653589793]
     snr_range: [5.0, 200.0]
     snr_index: 2.2
     duration: 1.0
 
+  BlipLowFrequency:
+    # Gravity Spy's Blip_Low_Frequency, modelled as a Blip at lower frequency (our assumption: the
+    # Blip's Q and phases). O3a: 0.45/h at H1, 2.50/h at L1; peak frequency 38-125 Hz; SNR index
+    # 4.81 (most are close to Omicron's threshold).
+    generator: sine_gaussian
+    rate: {H1: 0.451, L1: 2.504}
+    f0: [38.0, 125.0]
+    q: [2.0, 6.0]
+    log_uniform: [f0]
+    phases: [0.0, 3.141592653589793]
+    snr_range: [5.0, 200.0]
+    snr_index: 4.8
+    duration: 0.5
+
+  ScatteredLight:
+    # Gravity Spy's Scattered_Light as one ArchEnemy arch (Tolley et al. 2023, arXiv:2301.10491);
+    # the fringe frequency (top of the arch) follows Omicron's peak frequency. O3a: 3.03/h at H1,
+    # 1.90/h at L1; peak frequency 18-38 Hz; SNR index 2.39; Omicron durations 1-8.5 s, capped here
+    # at 3.5 s so arches fit in 4 s windows (raise timeperiod and duration for longer windows).
+    generator: scattered_light_arch
+    rate: {H1: 3.028, L1: 1.898}
+    fringe_frequency: [18.5, 37.8]
+    timeperiod: [1.8, 3.5]
+    snr_range: [5.0, 200.0]
+    snr_index: 2.4
+    duration: 3.6
+
+  # McGAN's training shapes (McGinn et al. 2021, CQG 38 155005): no Gravity Spy counterpart, so
+  # rate 0 (never drawn). Give them a rate or a weight to use them.
   Ringdown:
-    # Damped sinusoid starting at the injection time; McGAN's ranges (McGinn et al. 2021,
-    # CQG 38 155005). Rate: placeholder.
     generator: ringdown
-    rate: 0.5
+    rate: 0.0
     f0: [70.0, 250.0]
     q: [9.0, 20.0]
     snr_range: [5.0, 200.0]
@@ -62,10 +96,8 @@ classes:
     duration: 1.0
 
   WhiteNoiseBurst:
-    # Band-passed white noise under a Gaussian envelope exp(-(t - t0)^2 / tau) (tau in s^2,
-    # widths 0.01-0.1 s); McGAN's ranges. Rate: placeholder.
     generator: white_noise_burst
-    rate: 0.5
+    rate: 0.0
     tau: [1.0e-4, 1.0e-2]
     band: [70.0, 250.0]
     snr_range: [5.0, 200.0]
@@ -73,21 +105,9 @@ classes:
     duration: 1.0
 
   GaussianBlip:
-    # Gaussian pulse exp(-(t - t0)^2 / tau^2); McGAN's ranges. Rate: placeholder.
     generator: gaussian_blip
-    rate: 0.5
+    rate: 0.0
     tau: [0.01, 0.05]
     snr_range: [5.0, 200.0]
     snr_index: 2.2
     duration: 1.0
-
-  ScatteredLight:
-    # One arch (ArchEnemy model, Tolley et al. 2023, arXiv:2301.10491); ranges of ArchEnemy's
-    # template bank. Arches last up to 5.5 s: use segments longer than `duration`. Rate: placeholder.
-    generator: scattered_light_arch
-    rate: 1.0
-    fringe_frequency: [20.0, 80.0]
-    timeperiod: [1.8, 5.5]
-    snr_range: [5.0, 200.0]
-    snr_index: 2.2
-    duration: 6.0

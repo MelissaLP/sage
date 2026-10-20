@@ -32,10 +32,15 @@ Documentation:
     (one FFT per glitch), and since colouring is linear, each series is coloured and brought back
     to the time domain once, with the sum of its scaled glitches.
 
+    Parameters listed in a class's ``log_uniform`` are drawn log-uniformly on their range (as
+    GWForge draws f0); the others uniformly.
+
     Dense mode (DeepExtractor's training data: 1-30 glitches of random types per 2 s sample): with
-    ``glitches_per_segment: [low, high]`` at the top of the config, every segment of every detector
-    gets a number of glitches uniform in [low, high], each of a class drawn with probability
-    proportional to its ``weight`` (default 1); rates are then ignored.
+    ``glitches_per_segment: [low, high]`` at the top of the config, a segment of a detector gets
+    glitches with probability ``segment_probability`` (default 1), then a number uniform in
+    [low, high], each of a class drawn with probability proportional to its ``weight`` in that
+    detector. Without ``weight``, a class's ``rate`` is its weight, so the class mix follows the
+    rates (per detector if they are given per detector); classes with neither have weight 1.
 """
 
 import inspect
@@ -50,7 +55,7 @@ from .glitch_noise import _band_mask, _resample_asd, place_glitch, tukey_window
 from .scattered_light import scattered_light_arch
 
 GENERATORS = dict(ANALYTIC_GLITCHES, scattered_light_arch=scattered_light_arch)
-CLASS_KEYS = {"generator", "rate", "weight", "snr_range", "snr_index", "phases", "duration"}
+CLASS_KEYS = {"generator", "rate", "weight", "snr_range", "snr_index", "phases", "duration", "log_uniform"}
 PHASED = {"sine_gaussian", "ringdown"}
 
 
@@ -81,18 +86,23 @@ class GlitchPopulation:
             import yaml
             with open(config) as f:
                 config = yaml.safe_load(f)
+        self.config = config
         self.detectors = list(config.get("detectors", []))
         self.sample_rate = float(sample_rate or config["sample_rate"])
         self.classes = {name: self._check(name, dict(c)) for name, c in config["classes"].items()}
         self.per_segment = config.get("glitches_per_segment")
+        self.segment_probability = float(config.get("segment_probability", 1.0))
+        if not 0 <= self.segment_probability <= 1:
+            raise ValueError(f"segment_probability must be in [0, 1], got {self.segment_probability}")
         if self.per_segment is not None:
             low, high = (int(v) for v in self.per_segment)
             if not 0 <= low <= high:
                 raise ValueError(f"glitches_per_segment must be 0 <= low <= high, got {self.per_segment}")
             self.per_segment = (low, high)
-            self.weights = torch.tensor([float(c.get("weight", 1.0)) for c in self.classes.values()])
-            if (self.weights < 0).any() or self.weights.sum() <= 0:
-                raise ValueError("class weights must be >= 0 and not all 0")
+            for det in (self.detectors or [None]):
+                w = self.weights(det)
+                if (w < 0).any() or w.sum() <= 0:
+                    raise ValueError(f"class weights{' in ' + det if det else ''} must be >= 0 and not all 0")
 
     def _check(self, name, c):
         gen = c.get("generator")
@@ -108,9 +118,14 @@ class GlitchPopulation:
             raise ValueError(f"{name}: 'phases' only applies to {sorted(PHASED)}")
         if "phases" in c and "phi" in c:
             raise ValueError(f"{name}: give 'phases' or 'phi', not both")
-        rate = c.get("rate", 0.0)
-        if isinstance(rate, dict) and self.detectors and set(rate) - set(self.detectors):
-            raise ValueError(f"{name}: rates for unknown detectors {sorted(set(rate) - set(self.detectors))}")
+        for key in ("rate", "weight"):
+            v = c.get(key, 0.0)
+            if isinstance(v, dict) and self.detectors and set(v) - set(self.detectors):
+                raise ValueError(f"{name}: {key}s for unknown detectors {sorted(set(v) - set(self.detectors))}")
+        for key in c.get("log_uniform", []):
+            v = c.get(key)
+            if not (isinstance(v, (list, tuple)) and len(v) == 2 and 0 < v[0] < v[1]):
+                raise ValueError(f"{name}: log_uniform parameter {key!r} needs a range [low, high] with 0 < low < high")
         low, high = c.setdefault("snr_range", [5.0, 200.0])
         if not 0 < low < high:
             raise ValueError(f"{name}: snr_range must be 0 < low < high, got {c['snr_range']}")
@@ -128,6 +143,26 @@ class GlitchPopulation:
         r = self.classes[name].get("rate", 0.0)
         return float(r.get(detector, 0.0)) if isinstance(r, dict) else float(r)
 
+    def parameter_names(self) -> list:
+        """Names of all parameters the classes' glitches carry (``params`` of ``sample``)."""
+        names = set()
+        for name in self.classes:
+            names |= set(self.sample(name, 1, torch.Generator().manual_seed(0))[1])
+        return sorted(names)
+
+    def weights(self, detector: str = None) -> Tensor:
+        """Dense-mode class weights in ``detector``: ``weight``, else ``rate``, else 1."""
+        out = []
+        for name, c in self.classes.items():
+            if "weight" in c:
+                w = c["weight"]
+                out.append(float(w.get(detector, 0.0)) if isinstance(w, dict) else float(w))
+            elif "rate" in c:
+                out.append(self.rate(name, detector))
+            else:
+                out.append(1.0)
+        return torch.tensor(out, dtype=torch.float64)
+
     def sample(self, name: str, n: int, generator: torch.Generator = None, dtype=torch.float32,
                device=None):
         """``n`` glitches of class ``name``: shapes (n, duration * sample_rate) and their parameters
@@ -135,6 +170,9 @@ class GlitchPopulation:
         c = self.classes[name]
         gen = c["generator"]
         kwargs = {k: v for k, v in c.items() if k not in CLASS_KEYS}
+        for key in c.get("log_uniform", []):
+            low, high = (math.log(v) for v in c[key])
+            kwargs[key] = torch.exp(low + (high - low) * torch.rand(n, generator=generator, dtype=torch.float64))
         if gen != "scattered_light_arch":
             kwargs.setdefault("t0", c["duration"] / 2)          # centred: injection time = glitch time
         phase = None
@@ -156,10 +194,12 @@ class GlitchPopulation:
                                                    dtype=torch.float64), generator=generator))
                     for name in self.classes]
         low, high = self.per_segment
+        if self.segment_probability < 1 and float(torch.rand(1, generator=generator)) >= self.segment_probability:
+            return [0] * len(self.classes)
         total = int(torch.randint(low, high + 1, (1,), generator=generator))
         if total == 0:
             return [0] * len(self.classes)
-        picks = torch.multinomial(self.weights, total, replacement=True, generator=generator)
+        picks = torch.multinomial(self.weights(detector), total, replacement=True, generator=generator)
         return torch.bincount(picks, minlength=len(self.classes)).tolist()
 
     def draw_batch(self, segment_duration: float, detectors: list, generator: torch.Generator = None,

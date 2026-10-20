@@ -246,11 +246,11 @@ def test_power_law_snr():
 def test_population_config_classes():
     pop = GlitchPopulation(CONFIG)
     assert pop.detectors == ["H1", "L1"] and pop.sample_rate == 4096.0
-    assert pop.rate("Blip", "H1") == 1.3 and pop.rate("Tomte", "L1") == 6.2 and pop.rate("Ringdown", "H1") == 0.5
+    assert pop.rate("Blip", "H1") == 1.299 and pop.rate("Tomte", "L1") == 6.276 and pop.rate("Ringdown", "H1") == 0.0
     g = torch.Generator().manual_seed(1)
     for name, c in pop.classes.items():
         glitch, params = pop.sample(name, 3, g, dtype=torch.float64)
-        assert glitch.shape == (3, int(c["duration"] * 4096)) and torch.isfinite(glitch).all()
+        assert glitch.shape == (3, int(round(c["duration"] * 4096))) and torch.isfinite(glitch).all()
         assert ((params["snr"] >= 5) & (params["snr"] <= 200)).all()
     # Blip phase 0 or pi in GWForge's cosine convention: symmetric about the centre
     glitch, params = pop.sample("Blip", 4, g, dtype=torch.float64)
@@ -345,3 +345,25 @@ def test_population_apply_equals_add_glitch():
                                       f_low=10.0, f_high=900.0)
     assert sum(map(len, events)) > 30
     torch.testing.assert_close(out.reshape(-1, n), ref, rtol=0, atol=1e-9 * float(ref.abs().max()))
+
+
+
+def test_population_log_uniform_weights_and_probability():
+    pop = GlitchPopulation(CONFIG)
+    g = torch.Generator().manual_seed(9)
+    _, params = pop.sample("Blip", 20000, g, dtype=torch.float64)
+    logf = torch.log(params["f0"])
+    assert float(params["f0"].min()) >= 50.0 and float(params["f0"].max()) <= 500.0
+    assert float(logf.mean()) == pytest.approx(0.5 * (math.log(50) + math.log(500)), rel=0.01)
+    # dense mode: class mix from the per-detector rates; McGAN classes (rate 0) never drawn
+    cfg = dict(__import__("yaml").safe_load(CONFIG.read_text()), glitches_per_segment=[50, 50])
+    dense = GlitchPopulation(cfg)
+    torch.testing.assert_close(dense.weights("L1")[1], torch.tensor(6.276, dtype=torch.float64))
+    cls = collections.Counter(e["cls"] for _ in range(40) for e in dense.draw(4.0, "L1", g))
+    assert cls["Ringdown"] == cls["WhiteNoiseBurst"] == cls["GaussianBlip"] == 0
+    assert cls["Tomte"] / sum(cls.values()) == pytest.approx(6.276 / (0.655 + 6.276 + 2.504 + 1.898), rel=0.1)
+    half = GlitchPopulation(dict(cfg, segment_probability=0.5))
+    empty = sum(len(half.draw(4.0, "L1", g)) == 0 for _ in range(400))
+    assert empty == pytest.approx(200, abs=40)
+    with pytest.raises(ValueError):
+        GlitchPopulation(dict(cfg, segment_probability=1.5))

@@ -34,4 +34,6 @@ All of them give whitened glitch shapes for `GlitchInjector` (`glitch_noise.py`)
 
 The differences from each original are listed in the module docstrings.
 
+Rates and populations: `GlitchPopulation` (`glitch_population.py`) reads GWForge-style configs; `eucaif/sage_analytic_glitches.yaml` has O3a Gravity Spy rates computed with GWForge's method (`eucaif/gravityspy_o3a_rates.py`).
+
 Licence to discuss: ArchEnemy is GPL-3.0 (SAGE is MIT); `scattered_light.py` is written from the paper's equation and copies no ArchEnemy code.
