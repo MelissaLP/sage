@@ -7,6 +7,7 @@ per frame). Unlike DeepExtractor's STFT (64-sample window, ~256 Hz wide below 10
 Q-transform resolves low-frequency glitches such as scattered-light arches.
 
 Run everything from the SAGE repo root with `PYTHONPATH=.`.
+First steps with SAGE (Gaussian noise, whitening, Q-transform in ~20 lines): `eucaif/example_noise_qtransform.py`.
 
 ## Files
 
