@@ -7,8 +7,9 @@ Method taken from GWForge (Koustav Chandra et al., https://github.com/koustavcha
 their Blip and Tomte numbers on the same tables; this script reproduces them (Blip 1.30/h at H1,
 0.65/h at L1; Tomte 0.22/h at H1, 6.3/h at L1) and applies the same recipe to the other classes:
 
-- Gravity Spy machine-learning classifications of O3a Omicron triggers (Zenodo 5649212, CC BY 4.0;
-  Glanzer et al. 2023, Class. Quantum Grav. 40 065004), kept when ``ml_confidence >= 0.9``;
+- Gravity Spy machine-learning classifications of O3a Omicron triggers (Zenodo 5649212,
+  doi:10.5281/zenodo.5649212, CC BY 4.0; Glanzer et al. 2023, Class. Quantum Grav. 40 065004,
+  doi:10.1088/1361-6382/acb633), kept when ``ml_confidence >= 0.9``;
 - rate = number of triggers / observing time, the observing time being the GWOSC O3a ``DATA``
   segments of each detector (public strain available: 3116 h at H1, 3321 h at L1);
 - peak frequency and duration: 5 / 50 / 95 % quantiles of Omicron's ``peak_frequency`` and

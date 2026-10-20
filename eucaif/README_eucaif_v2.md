@@ -45,8 +45,9 @@ https://github.com/koustavchandra/gwforge, MIT): its configuration format, its B
 classes and ranges, and its way of setting rates. GWForge motivates its numbers on the public
 Gravity Spy O3a tables; we took that recipe and applied it to all our classes:
 
-- Gravity Spy O3a classifications (Zenodo 5649212, CC BY 4.0; Glanzer et al. 2023,
-  Class. Quantum Grav. 40 065004) with `ml_confidence >= 0.9`;
+- Gravity Spy O3a classifications ([Zenodo 5649212](https://zenodo.org/records/5649212),
+  doi:10.5281/zenodo.5649212, CC BY 4.0; Glanzer et al. 2023, Class. Quantum Grav. 40 065004,
+  [doi:10.1088/1361-6382/acb633](https://doi.org/10.1088/1361-6382/acb633)) with `ml_confidence >= 0.9`;
 - rate = count / GWOSC O3a observing time (DATA segments: 3116 h at H1, 3321 h at L1);
 - frequency ranges from the 5-95 % quantiles of Omicron's peak frequency, and the SNR power-law
   index from a maximum-likelihood fit to Omicron SNRs above 7.5 (used, as in GWForge, for the

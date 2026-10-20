@@ -4,7 +4,8 @@
 # https://github.com/koustavchandra/gwforge: GWForge/glitch/configuration_files/blip_tomte.ini and
 # docs/source/glitch.md). Blip and Tomte are GWForge's classes and ranges; the rates, frequency
 # ranges and SNR indices of every class come, as in GWForge, from the public Gravity Spy O3a tables
-# (Zenodo 5649212, CC BY 4.0; Glanzer et al. 2023), classifications with ml_confidence >= 0.9,
+# (Zenodo 5649212, doi:10.5281/zenodo.5649212, CC BY 4.0; Glanzer et al. 2023, CQG 40 065004,
+# doi:10.1088/1361-6382/acb633), classifications with ml_confidence >= 0.9,
 # divided by the GWOSC O3a DATA time (3116 h at H1, 3321 h at L1). eucaif/gravityspy_o3a_rates.py
 # recomputes them (and the numbers of every other Gravity Spy class).
 #
