@@ -306,12 +306,16 @@ class QTransform(torch.nn.Module):
         # per plane: rows grouped by ntiles, each group with its gather indices and windows
         # (already placed at their ifftshifted positions), plus the frequency operator
         self._planes = []
+        self._plane_rows = []          # per plane: (frequencies, [(ntiles, data indices, window)])
+        self._tile_ops = {}            # common-grid operators for tiles/inverse, built on demand
         time_ops = {}
         for p, q in enumerate(qs):
             freqs = _plane_frequencies(q, self.frange, duration, mismatch)
             groups = {}
+            self._plane_rows.append((np.asarray(freqs), []))
             for r, f in enumerate(freqs):
                 ntiles, idx, win, (pad_left, _) = _tile_row(q, f, duration, self.sample_rate, mismatch)
+                self._plane_rows[-1][1].append((ntiles, idx, win))
                 pos = (pad_left + np.arange(idx.size) - ntiles // 2) % ntiles  # after ifftshift
                 gidx = np.zeros(ntiles, dtype=np.int64)
                 gwin = np.zeros(ntiles)
@@ -461,3 +465,96 @@ class QTransform(torch.nn.Module):
         if return_q:
             return out, self.qs[choice.cpu()].reshape(lead)
         return out
+
+    # -- invertible tiles ----------------------------------------------------------------------
+
+    def plane_index(self, q: float) -> int:
+        """Index of the Q-plane whose Q is closest to ``q``."""
+        return int(torch.argmin((self.qs - float(q)).abs()))
+
+    def _tile_operator(self, p: int, device):
+        """Plane ``p`` on its common time grid: gather indices and windows, (R, ncols) each.
+
+        Every row's windowed bins are zero-padded to ``ncols`` (the plane's largest ``ntiles``)
+        with gwpy's centring, i.e. band-limited interpolation of its tiles onto one time grid;
+        the window is scaled by ncols / ntiles so the tiles keep gwpy's amplitudes.
+        """
+        key = (p, str(device), self.dtype)
+        if key not in self._tile_ops:
+            rows = self._plane_rows[p][1]
+            ncols = max(r[0] for r in rows)
+            gidx = np.zeros((len(rows), ncols), dtype=np.int64)
+            gwin = np.zeros((len(rows), ncols))
+            for i, (ntiles, idx, win) in enumerate(rows):
+                pad_left = int((ncols - idx.size - 1) / 2.0)
+                pos = (pad_left + np.arange(idx.size) - ncols // 2) % ncols   # after ifftshift
+                gidx[i, pos] = idx
+                gwin[i, pos] = win * ncols / ntiles
+            self._tile_ops[key] = (torch.tensor(gidx, device=device),
+                                   torch.tensor(gwin, dtype=self.dtype, device=device))
+        return self._tile_ops[key]
+
+    def tile_frequencies(self, q: float) -> Tensor:
+        """Row frequencies (Hz) of the plane nearest ``q``, as returned by ``tiles``."""
+        return torch.tensor(self._plane_rows[self.plane_index(q)][0], dtype=torch.float64)
+
+    def tile_times(self, q: float) -> Tensor:
+        """Column times (s from the start) of the plane nearest ``q``, as returned by ``tiles``."""
+        ncols = max(r[0] for r in self._plane_rows[self.plane_index(q)][1])
+        return torch.arange(ncols, dtype=torch.float64) * self.duration / ncols
+
+    def coverage(self, q: float) -> Tensor:
+        """Sum over rows of the squared windows on each rfft bin; ``inverse`` recovers the bins
+        above ``rcond`` times its maximum."""
+        idx, win = self._tile_operator(self.plane_index(q), torch.device("cpu"))
+        den = torch.zeros(self.seq_len // 2 + 1, dtype=self.dtype)
+        return den.index_add_(0, idx.reshape(-1), (win ** 2).reshape(-1))
+
+    def tiles(self, x: Tensor, q: float) -> Tensor:
+        """Complex Q-tiles of the plane nearest ``q``, on one time grid: (..., T) -> (..., R, ncols).
+
+        Unlike ``forward``, nothing is discarded: no ``|.|^2``, no normalisation, no spline
+        interpolation, so ``inverse`` recovers the input within the plane's band. ``|tiles|^2``
+        equals gwpy's raw tile energies at the times shared with each row's own tiles. Rows are
+        at ``tile_frequencies(q)``, columns at ``tile_times(q)``.
+        """
+        if x.shape[-1] != self.seq_len:
+            raise ValueError(f"Input length {x.shape[-1]} doesn't match seq_len={self.seq_len}")
+        grad = contextlib.nullcontext() if self.differentiable else torch.no_grad()
+        with grad:
+            lead = x.shape[:-1]
+            X = self._fft(x.to(dtype=self.dtype).reshape(-1, self.seq_len))
+            idx, win = self._tile_operator(self.plane_index(q), x.device)
+            Z = torch.fft.ifft(X[:, idx] * win, dim=-1)                  # (M, R, ncols)
+            return Z.reshape(*lead, *Z.shape[-2:])
+
+    def inverse(self, tiles: Tensor, q: float, rcond: float = 1e-3) -> Tensor:
+        """Time series from (possibly modified) complex tiles of ``tiles(x, q)``: (..., R, ncols) -> (..., T).
+
+        Least squares over the overlapping rows: X(f) = sum_r w_r(f) Y_r(f) / sum_r w_r(f)^2, with
+        Y_r = fft(tiles_r), on the bins whose ``coverage`` exceeds ``rcond`` times its maximum (the
+        plane's band); other bins are set to 0. For unmodified tiles this is exact on the band, so
+        ``x - inverse(tiles(x, q), q)`` is ``x`` restricted to the bins outside it. ``rcond`` matters
+        for modified tiles (masks, network outputs): bins reached only by the far tails of the
+        windows would otherwise divide by ~0 and amplify any change there.
+        """
+        grad = contextlib.nullcontext() if self.differentiable else torch.no_grad()
+        with grad:
+            idx, win = self._tile_operator(self.plane_index(q), tiles.device)
+            if tiles.shape[-2:] != idx.shape:
+                raise ValueError(f"Expected tiles of shape (..., {idx.shape[0]}, {idx.shape[1]}) for "
+                                 f"Q = {float(self.qs[self.plane_index(q)]):.2f}, got {tuple(tiles.shape)}")
+            lead = tiles.shape[:-2]
+            Y = torch.fft.fft(tiles.reshape(-1, *idx.shape), dim=-1) * win    # (M, R, ncols)
+            nbins = self.seq_len // 2 + 1
+            num = torch.zeros(Y.shape[0], nbins, 2, dtype=self.dtype, device=Y.device)
+            num = num.index_add(1, idx.reshape(-1), torch.view_as_real(Y).reshape(Y.shape[0], -1, 2))
+            den = torch.zeros(nbins, dtype=self.dtype, device=Y.device)
+            den = den.index_add(0, idx.reshape(-1), (win ** 2).reshape(-1))
+            band = den > rcond * den.max()
+            X = torch.view_as_complex(num) * torch.where(band, 1.0 / torch.where(band, den, torch.ones_like(den)),
+                                                         torch.zeros_like(den))
+            # undo gwpy's TimeSeries.fft (rfft / T, doubled above DC)
+            X = torch.cat([X[..., :1], 0.5 * X[..., 1:]], dim=-1) * self.seq_len
+            x = torch.fft.irfft(X, n=self.seq_len, dim=-1)
+            return x.reshape(*lead, self.seq_len)

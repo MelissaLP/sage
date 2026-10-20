@@ -152,3 +152,57 @@ def test_gradients_match_finite_differences(gps):
     np.testing.assert_array_equal(out.detach().numpy(), qt(x, gps=gps).numpy())
     out.sum().backward()
     assert x.grad is not None and torch.isfinite(x.grad).all() and x.grad.abs().max() > 0
+
+
+# -- invertible tiles ----------------------------------------------------------------------------
+
+@pytest.mark.parametrize("q", [5.7, 45.3])
+def test_tiles_inverse_round_trip(q):
+    """inverse(tiles(x)) == x on the plane's band (coverage > rcond * max), 0 elsewhere."""
+    qt = QTransform(FS, T, qrange=(4, 64), frange=(20, 500), norm=False, dtype=torch.float64)
+    x = torch.tensor(_data()[:, 0])
+    rec = qt.inverse(qt.tiles(x, q), q)
+    c = qt.coverage(q)
+    cov = c > 1e-3 * c.max()
+    X, R = torch.fft.rfft(x), torch.fft.rfft(rec)
+    f = torch.fft.rfftfreq(T, 1 / FS)
+    assert cov[(f > 25) & (f < 450)].all()
+    np.testing.assert_allclose(R[:, cov].numpy(), X[:, cov].numpy(), atol=1e-8 * float(X.abs().max()))
+    assert R[:, ~cov].abs().max() < 1e-10 * X.abs().max()
+
+
+def test_tiles_are_gwpy_tile_energies():
+    """|tiles|^2 equals the raw tile energies of forward's rows at each row's own tile times."""
+    qt = QTransform(FS, T, qrange=(4, 64), norm=False, dtype=torch.float64)
+    x = torch.tensor(_data()[:, 1])
+    X = qt._fft(x)
+    for p, q in enumerate(qt.qs):
+        Z = qt.tiles(x, q)
+        ncols = Z.shape[-1]
+        for name, ntiles in qt._planes[p][0]:
+            energy = qt._group_energy(X, name)                            # (2, R, ntiles)
+            rows = getattr(qt, name + "_rows")
+            np.testing.assert_allclose((Z[:, rows, ::ncols // ntiles].abs() ** 2).numpy(), energy.numpy(),
+                                       rtol=1e-9, atol=1e-12 * float(energy.max()))
+    assert Z.shape[-2] == len(qt.tile_frequencies(q)) and Z.shape[-1] == len(qt.tile_times(q))
+
+
+def test_tiles_inverse_differentiable():
+    qt = QTransform(FS, T, qrange=(8, 8), frange=(20, 500), norm=False, dtype=torch.float64, differentiable=True)
+    x = torch.tensor(_data()[0, 0], requires_grad=True)
+    rec = qt.inverse(qt.tiles(x, 8.0), 8.0)
+    rec.pow(2).sum().backward()
+    assert torch.isfinite(x.grad).all() and x.grad.abs().max() > 0
+    with pytest.raises(ValueError):
+        qt.inverse(torch.zeros(3, 4, dtype=torch.complex128), 8.0)
+
+
+def test_inverse_of_masked_tiles_is_bounded():
+    """Masking tiles must not blow up the far window tails (rcond): output energy <= input energy."""
+    qt = QTransform(FS, T, qrange=(4, 64), frange=(20, 500), norm=False, dtype=torch.float64)
+    x = torch.tensor(_data()[0, 0])
+    for q in qt.qs:
+        Z = qt.tiles(x, q)
+        mask = torch.rand(Z.shape, generator=torch.Generator().manual_seed(0), dtype=torch.float64) > 0.5
+        rec = qt.inverse(Z * mask, q)
+        assert rec.norm() <= x.norm()
