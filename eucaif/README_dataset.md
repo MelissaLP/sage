@@ -1,5 +1,7 @@
 # EuCAIF whitened BBH dataset
 
+v2 (noise + BBH + O3a-calibrated analytic glitches, on the fly, time series and Q-transforms): see `README_eucaif_v2.md`.
+
 Whitened two-detector (H1, L1) strain examples for binary-black-hole detection.
 Each example is either **Gaussian noise only** (class 0) or **noise plus a
 non-spinning IMRPhenomPv2 signal** (class 1). Produced by

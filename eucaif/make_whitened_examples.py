@@ -170,6 +170,13 @@ class WhitenedExampleGenerator:
     merger_margin : float
         Every merger (peak of |h(t)| in each detector) must lie at least this
         many seconds inside the whitened sample window, else ValueError.
+    glitches : sage.data.noise.GlitchPopulation or None
+        Optional glitches (EuCAIF v2), drawn per example and detector,
+        coloured with the same ASD and added before whitening, inside the
+        sample window only. ``None`` (default) gives exactly the v1 examples.
+    glitch_f_low : float or None
+        Glitch content below this frequency (Hz) is removed before setting
+        each glitch's SNR.
     """
 
     def __init__(
@@ -182,6 +189,8 @@ class WhitenedExampleGenerator:
         dtype=torch.float32,
         seed=150914,
         merger_margin=0.25,
+        glitches=None,
+        glitch_f_low=None,
     ):
         data_cfg = get_data_cfg()
         self.waveform_yaml = str(waveform_yaml)
@@ -216,6 +225,14 @@ class WhitenedExampleGenerator:
         self.dtype = dtype
         self.seed = int(seed)
         self.merger_margin = float(merger_margin)
+        self.glitches = glitches
+        self.glitch_f_low = glitch_f_low
+        if glitches is not None:
+            if list(glitches.detectors) != self.detectors[: len(asd_names)]:
+                raise ValueError(f"glitch detectors {glitches.detectors} != {self.detectors}")
+            if glitches.sample_rate != self.fs:
+                raise ValueError(f"glitch sample rate {glitches.sample_rate} != {self.fs}")
+            self._glitch_params = [k for k in glitches.parameter_names() if k != "snr"]
 
         # -- waveform generator (FD, on its own padded grid) --
         self.param_sampler = read_from_config(self.waveform_yaml, seed=self.seed)
@@ -331,6 +348,13 @@ class WhitenedExampleGenerator:
         # -- assemble and whiten: negatives first, then positives --
         x = noise
         x[n:] += h_td
+        if self.glitches is not None:
+            # glitches in both classes, only inside the sample window (seconds of the padded window)
+            g = torch.Generator().manual_seed(int(noise_seed) + 2)
+            window = (self.padding_s, self.padding_s + self.sample_length_s)
+            glitch_td, events = self.glitches.inject(torch.zeros_like(x), self.asd, g,
+                                                     f_low=self.glitch_f_low, window=window)
+            x = x + glitch_td
         x_w = self.whitener(x)[..., self._crop]
         y = torch.cat([torch.zeros(n), torch.ones(n)]).long()
 
@@ -348,6 +372,9 @@ class WhitenedExampleGenerator:
             "snr": snr.float(), "snr_det": snr_det.float(),
             "tc": tc.float(), "t_merger": t_merger.float(), "t": self.t,
         }
+        if self.glitches is not None:
+            out["glitch_whitened"] = self.whitener(glitch_td)[..., self._crop]
+            out["n_glitches"], out["glitch_table"] = self._glitch_table(events, 2 * n)
         if keep_signal:
             sig_w = self.whitener(h_td)[..., self._crop]
             out["signal_whitened"] = sig_w
@@ -356,9 +383,38 @@ class WhitenedExampleGenerator:
             out["snr_from_whitened"] = sig_w.double().pow(2).sum(-1).sum(-1).sqrt().float()
         return out
 
+    GLITCH_COLUMNS = ["example", "detector", "class", "time", "snr"]
+
+    def _glitch_table(self, events, n_examples):
+        """Glitch counts (n, D) and one row per glitch: example, detector and class indices, time
+        (s from the start of the sample window, the glitch centre), SNR and generator parameters."""
+        classes = list(self.glitches.classes)
+        params = self._glitch_params
+        rows = {k: [] for k in self.GLITCH_COLUMNS + params}
+        counts = np.zeros((n_examples, self.D), dtype=np.int16)
+        for i, evs in enumerate(events):
+            ex, det = divmod(i, self.D)
+            counts[ex, det] = len(evs)
+            for e in evs:
+                for k, v in zip(self.GLITCH_COLUMNS, (ex, det, classes.index(e["cls"]),
+                                                      e["time"] - self.padding_s, e["snr"])):
+                    rows[k].append(v)
+                for k in params:
+                    rows[k].append(e["params"].get(k, np.nan))
+        return counts, {k: np.asarray(v, dtype=np.int32 if k in ("example", "detector", "class") else np.float64)
+                        for k, v in rows.items()}
+
     def attrs(self):
         """Dataset-level description, stored as HDF5 attributes."""
+        extra = {}
+        if self.glitches is not None:
+            extra = {
+                "glitch_classes": np.array(list(self.glitches.classes), dtype="S"),
+                "glitch_population": repr(self.glitches.config),
+                "glitch_f_low": float(self.glitch_f_low) if self.glitch_f_low is not None else -1.0,
+            }
         return {
+            **extra,
             "detectors": np.array(self.detectors[: self.D], dtype="S"),
             "asd_names": np.array(self.asd_names, dtype="S"),
             "sample_rate": self.fs,
@@ -431,6 +487,11 @@ def write_dataset(
         f.create_dataset("t", data=generator.t.numpy())
         for k, v in generator.attrs().items():
             f.attrs[k] = v
+        if generator.glitches is not None:
+            dg = f.create_dataset("glitch", shape=(n_total, D, L), dtype=store_dtype,
+                                  chunks=(min(64, n_total), D, L))
+            dng = f.create_dataset("n_glitches", shape=(n_total, D), dtype="int16")
+            dgl = {}
 
         written, chunk_idx = 0, 0
         while written < n_total:
@@ -446,6 +507,19 @@ def write_dataset(
                 [np.full(n, np.nan, np.float32), data["snr"].numpy()])[order]
             dsnr_det[sl] = np.concatenate(
                 [np.full((n, D), np.nan, np.float32), data["snr_det"].numpy()])[order]
+            if generator.glitches is not None:
+                dg[sl] = data["glitch_whitened"].numpy().astype(store_dtype)[order]
+                dng[sl] = data["n_glitches"][order]
+                table = data["glitch_table"]
+                position = np.argsort(order)                  # chunk example -> row in this chunk
+                table["example"] = written + position[table["example"]]
+                for k, v in table.items():
+                    if k not in dgl:
+                        dgl[k] = f.create_dataset(f"glitches/{k}", shape=(0,), maxshape=(None,),
+                                                  dtype=v.dtype, chunks=(65536,))
+                    old = dgl[k].shape[0]
+                    dgl[k].resize((old + len(v),))
+                    dgl[k][old:] = v
             written += 2 * n
             chunk_idx += 1
             print(f"  {written}/{n_total} examples written")

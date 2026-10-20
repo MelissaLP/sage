@@ -1,0 +1,41 @@
+# EuCAIF dataset v2: whitened H1/L1 strain mixing stationary Gaussian noise, BBH signals (as v1) and
+# O3a-calibrated analytic glitches, for training on the fly and for fixed validation / test files,
+# as time series and Q-transforms. Read by eucaif/eucaif_v2.py; instructions in README_eucaif_v2.md.
+# Paths are relative to this file.
+
+data:
+  detectors: [H1, L1]
+  asd: [aLIGOZeroDetHighPower, aLIGOZeroDetHighPower]   # one per detector (sage.data.noise.available_asds)
+  sample_rate: 2048.0
+  frame_length: 2.0              # s, the network's input window (v1: 2 s)
+  q_padding: 1.0                 # s stored on each side of the frame, so Q-transforms of the stored
+                                 # window can be cut to the frame (circular wrap-around); 0 for time
+                                 # series only
+  signal_padding: 4.0            # s generated on each side of the stored window: the BBH inspiral
+                                 # must fit (10+10 Msun from 20 Hz: ~6 s) and the whitening drops
+                                 # whitening_fduration / 2 at each end
+  whitening_fduration: 4.0       # s, FIR whitening filter (v1: 4 s)
+  whitening_highpass: 15.0       # Hz (v1: 15 Hz)
+  signal_low_frequency_cutoff: 20.0
+
+signal:
+  prior: sage_eucaif_waveform.yaml   # v1's BBH prior; its tc is replaced by q_padding + tc_in_frame
+  tc_in_frame: [0.5, 1.5]            # s, geocentric merger time from the start of the frame (v1: same)
+  snr_range: null                    # null: physical distances (v1); [MIN, MAX]: network optimal SNR
+                                     # uniform in the range, distance rescaled to match
+  # Half of the examples have a BBH (class 1), half are noise only (class 0), as in v1.
+
+glitches:
+  population: sage_analytic_glitches.yaml   # O3a-calibrated classes (Gravity Spy rates, as GWForge)
+  probability: 0.5               # fraction of (example, detector) pairs with glitches, in both classes
+  per_window: [1, 3]             # glitches when present, anywhere in the stored window; each of a
+                                 # class drawn in proportion to its O3a rate in that detector
+  f_low: 15.0                    # Hz, glitch content below is removed before setting its SNR
+  # probability: 0 gives v1-like data (no glitches).
+
+qtransform:                      # settings for Q-transform inputs (computed on the GPU at training time)
+  qrange: [4, 64]                # Q-scan: the plane with the loudest tile, per example and detector
+  frange: [15, 1000]
+  n_times: 256                   # output grid over the frame (outseg), as images
+  n_freqs: 256                   # log-spaced
+  tiles_q: [5.7, 45.3]           # invertible complex tiles, one entry per Q-plane wanted as channels
