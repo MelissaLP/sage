@@ -73,6 +73,18 @@ def test_search_window_and_per_series_gps():
             np.testing.assert_allclose(out[i, d].numpy(), ref.value, atol=1e-6 * np.abs(ref.value).max())
 
 
+@pytest.mark.parametrize("norm", ["median", False])
+def test_best_q_matches_forward(norm):
+    """best_q picks forward's plane, per series, with and without a search window."""
+    x = torch.tensor(_data())
+    qt = QTransform(FS, T, search=0.3, norm=norm, dtype=torch.float64)
+    gps = torch.tensor([[1.2, 0.7], [1.2, 0.7]], dtype=torch.float64)
+    for g in (None, gps):
+        _, q = qt(x, gps=g, return_q=True)
+        assert torch.equal(qt.best_q(x, gps=g), q)
+    assert qt.best_q(x[0, 0]).shape == ()
+
+
 def test_float32_and_leading_dims():
     x = torch.tensor(_data())
     out64 = QTransform(FS, T, dtype=torch.float64)(x)

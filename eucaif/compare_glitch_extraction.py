@@ -119,7 +119,7 @@ def residual_snr(e):
 
 # -- one glitch ------------------------------------------------------------------------------------
 
-def run(name, glitch, snr, methods_for_q, kappas, kappa, seed):
+def run(name, glitch, snr, methods_for_q, kappas, kappa, seed, q=None):
     g = torch.Generator().manual_seed(seed)
     noise = torch.randn(4, N, generator=g, dtype=torch.float64)          # [0] data, [1:] noise floor
     inj = GlitchInjector(FS, f_low=F_LOW, f_high=F_HIGH, lowpass_order=None)
@@ -130,8 +130,7 @@ def run(name, glitch, snr, methods_for_q, kappas, kappa, seed):
     x = noise[0] + h
 
     qt = QTransform(FS, N, qrange=(4, 64), frange=(F_LOW, F_HIGH), norm=False, dtype=torch.float64)
-    _, q = qt(x, return_q=True)
-    q = float(q)
+    q = float(qt.best_q(x)) if q is None else float(qt.qs[qt.plane_index(q)])   # default: loudest plane
     methods = methods_for_q(q, qt)
 
     out = {"q": q, "x": x, "h": h, "methods": {}}

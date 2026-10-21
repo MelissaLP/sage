@@ -443,16 +443,9 @@ class QTransform(torch.nn.Module):
         if not torch.isfinite(x.detach()).all():
             raise ValueError("Input signal contains non-numerical values")
         X = self._fft(x)
-        if gps is not None:
-            gps = torch.as_tensor(gps, dtype=torch.float64, device="cpu").expand(lead).reshape(-1)
-
-        # 1st pass: loudest tile of every plane (energies are recomputed for the chosen plane
+        # 1st pass: loudest plane of each series (energies are recomputed for the chosen plane
         # only, rather than keeping every plane's tiles in memory)
-        # (a discrete choice: no gradient, so no autograd graph either)
-        with torch.no_grad():
-            Xd = X.detach()
-            peaks = torch.stack([self._plane_peak(Xd, p, gps) for p in range(len(self._planes))])
-            choice = torch.argmax(peaks, dim=0)                      # first maximum, as gwpy
+        choice = self._choose_planes(X, gps, lead)
 
         # 2nd pass: the chosen plane of each series (index_copy keeps the autograd graph)
         out = torch.zeros(x.shape[0], self.times.numel(), self.frequencies.numel(),
@@ -465,6 +458,41 @@ class QTransform(torch.nn.Module):
         if return_q:
             return out, self.qs[choice.cpu()].reshape(lead)
         return out
+
+    def _choose_planes(self, X: Tensor, gps, lead) -> Tensor:
+        """Index of the plane with the loudest tile, per series: (M, F) -> (M,)."""
+        if gps is not None:
+            gps = torch.as_tensor(gps, dtype=torch.float64, device="cpu").expand(lead).reshape(-1)
+        # a discrete choice: no gradient, so no autograd graph either
+        with torch.no_grad():
+            Xd = X.detach()
+            peaks = torch.stack([self._plane_peak(Xd, p, gps) for p in range(len(self._planes))])
+            return torch.argmax(peaks, dim=0)                        # first maximum, as gwpy
+
+    def best_q(self, x: Tensor, gps=None) -> Tensor:
+        """
+        Q of the plane ``forward`` would choose for each series, without building its spectrogram.
+
+        Parameters
+        ----------
+        x : Tensor, shape (..., T)
+            Time series (normally whitened), ``T == seq_len``.
+        gps : float or Tensor broadcastable to ``x.shape[:-1]``, optional
+            As in ``forward``: search the loudest plane within ``gps +/- search / 2``.
+
+        Returns
+        -------
+        Tensor, shape ``x.shape[:-1]``
+            Q of the chosen plane (float64, on the CPU, like ``qs``); pass it to ``tiles``.
+        """
+        if x.shape[-1] != self.seq_len:
+            raise ValueError(f"Input length {x.shape[-1]} doesn't match seq_len={self.seq_len}")
+        lead = x.shape[:-1]
+        x = x.to(dtype=self.dtype).reshape(-1, self.seq_len)
+        if not torch.isfinite(x.detach()).all():
+            raise ValueError("Input signal contains non-numerical values")
+        choice = self._choose_planes(self._fft(x), gps, lead)
+        return self.qs[choice.cpu()].reshape(lead)
 
     # -- invertible tiles ----------------------------------------------------------------------
 
