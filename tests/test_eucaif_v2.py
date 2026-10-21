@@ -73,7 +73,7 @@ def test_written_file(tmp_path):
         assert len(ex) == int(f["n_glitches"][:].sum()) and (ex >= 0).all() and (ex < n).all()
         counts = np.bincount(ex, minlength=n)
         np.testing.assert_array_equal(counts, f["n_glitches"][:].sum(1))
-        assert f.attrs["dataset_version"] == "eucaif v2" and "glitches:" in f.attrs["eucaif_v2_config"]
+        assert f.attrs["dataset_version"] == "eucaif v2.1" and "glitches:" in f.attrs["eucaif_v2_config"]
 
 
 def test_nonphysical_off_and_config_errors():

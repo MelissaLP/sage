@@ -13,7 +13,7 @@ First steps with SAGE (Gaussian noise, whitening, Q-transform in ~20 lines): `eu
 
 | File | What it is |
 |---|---|
-| `eucaif/sage_analytic_glitches_dense.yaml` | **The config**: one detector (L1; list more under `detectors` and `asd` if needed), glitch classes (Blip, Tomte, sine-Gaussian, ringdown, white-noise burst, Gaussian blip, scattered-light arch), 5-30 glitches per window, SNR range, and the `dataset` block (frame, padding, whitening, ASD) |
+| `eucaif/sage_analytic_glitches_dense.yaml` | **The config**: one detector (L1; list more under `detectors` and `asd` if needed), glitch classes (Blip, Tomte and Koi_Fish with Antiglitch's model, ported from the [Antiglitch repository](https://github.com/andrew-lundgren/antiglitch); sine-Gaussian, ringdown, white-noise burst, Gaussian blip, scattered-light arch), 5-30 glitches per window, SNR range, and the `dataset` block (frame, padding, whitening, ASD) |
 | `eucaif/make_glitch_dataset.py` | Generates frames and writes them to HDF5 (fixed validation / test sets) |
 | `eucaif/glitch_frames.py` | `GlitchFramesOnTheFly` (training) and `StoredGlitchFrames` (validation / test): same format |
 | `sage/data/noise/glitch_population.py` | Reads the config, draws and injects the glitches |

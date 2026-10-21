@@ -77,7 +77,7 @@ def plot(data, gen, qt, path):
             if col == 0:
                 ax.set_ylabel("whitened strain")
     axes[0, 0].set_xlim(0, qt.frame_s)
-    fig.suptitle("EuCAIF v2: 2 s frame of whitened H1/L1 strain (orange: O3a glitches, violet: non-physical "
+    fig.suptitle("EuCAIF v2.1: 2 s frame of whitened H1/L1 strain (orange: O3a glitches, violet: non-physical "
                  "McGAN glitch, blue: BBH)", fontsize=11, y=0.995)
     fig.savefig(path, dpi=130, bbox_inches="tight")
     print("saved", path)

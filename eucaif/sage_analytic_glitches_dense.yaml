@@ -30,25 +30,39 @@ dataset:
 
 classes:
 
-  Blip:             # GWForge's Blip (Gravity Spy O3a ranges), phase 0 or pi
-    generator: sine_gaussian
+  # Blip, Tomte and KoiFish: antiglitch_glitch, ported from the Antiglitch repository (A. Lundgren,
+  # https://github.com/andrew-lundgren/antiglitch, MIT; arXiv:2309.06594).
+  Blip:             # Antiglitch's model, ranges of its O3 Blip fits; phase 0 or pi
+    generator: antiglitch_glitch
     weight: 1.0
-    f0: [50.0, 500.0]
-    q: [2.0, 6.0]
+    f0: [12.0, 260.0]
+    gbw: [0.29, 4.2]
+    log_uniform: [f0, gbw]
     phases: [0.0, 3.141592653589793]
     snr_range: [5.0, 100.0]
     snr_index: 0.0
     duration: 0.5
 
-  Tomte:            # GWForge's Tomte, phase pi
-    generator: sine_gaussian
+  Tomte:            # Antiglitch's model, ranges of its O3 Tomte fits; phase pi
+    generator: antiglitch_glitch
     weight: 1.0
-    f0: [30.0, 65.0]
-    q: [4.0, 12.0]
+    f0: [12.0, 26.0]
+    gbw: [1.4, 7.0]
+    log_uniform: [f0, gbw]
     phases: [3.141592653589793]
     snr_range: [5.0, 100.0]
     snr_index: 0.0
     duration: 1.0
+
+  KoiFish:          # Antiglitch's model, ranges of its O3 Koi_Fish fits; random phase
+    generator: antiglitch_glitch
+    weight: 1.0
+    f0: [10.0, 168.0]
+    gbw: [0.31, 7.5]
+    log_uniform: [f0, gbw]
+    snr_range: [5.0, 100.0]
+    snr_index: 0.0
+    duration: 0.5
 
   SineGaussian:     # McGAN's sine-Gaussian, random phase
     generator: sine_gaussian

@@ -23,7 +23,7 @@ Usage, from the SAGE repo root (downloads ~230 MB once into --data-dir):
     python3 eucaif/gravityspy_o3a_rates.py --data-dir gravityspy_o3a [--yaml o3a_classes.yaml]
 
 It prints the table for every Gravity Spy class and, with --yaml, writes the numbers for the classes
-that have an analytic model in SAGE (Blip, Tomte, Blip_Low_Frequency as sine-Gaussians, Scattered_Light
+that have an analytic model in SAGE (Blip, Tomte, Blip_Low_Frequency, Koi_Fish with Antiglitch's model, Scattered_Light
 as an ArchEnemy arch).
 """
 
@@ -42,7 +42,7 @@ SNR_THRESHOLD = 7.5
 COLUMNS = ["snr", "peak_frequency", "duration", "ml_label", "ml_confidence"]
 # Gravity Spy class -> SAGE class name (in sage_analytic_glitches.yaml)
 MODELLED = {"Blip": "Blip", "Tomte": "Tomte", "Blip_Low_Frequency": "BlipLowFrequency",
-            "Scattered_Light": "ScatteredLight"}
+            "Koi_Fish": "KoiFish", "Scattered_Light": "ScatteredLight"}
 
 
 def fetch(url, path):

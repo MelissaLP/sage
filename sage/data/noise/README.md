@@ -31,6 +31,7 @@ All of them give whitened glitch shapes for `GlitchInjector` (`glitch_noise.py`)
 | Real O3 glitches, 7 Gravity Spy classes, 2 s at 4096 Hz | `glitch_bank.py` (`DeepExtractorGlitchBank`; needs `huggingface_hub`) | [DeepExtractor reconstructions](https://huggingface.co/datasets/tomdooney/deepextractor-glitch-reconstructions), CC BY 4.0, Dooney et al., PRD (2026) |
 | Analytic: sine-Gaussian, ringdown, white noise burst, Gaussian blip | `analytic_glitches.py` | [McGANn](https://github.com/jmcginn/McGANn) `cGAN/GAN_training_data.py`, MIT, McGinn et al., [CQG 38 155005 (2021)](https://doi.org/10.1088/1361-6382/ac09cc) |
 | Scattered-light arches | `scattered_light.py` (`scattered_light_arch`) | [ArchEnemy](https://github.com/ArthurTolley/ArchEnemy) model, Tolley et al., [arXiv:2301.10491](https://arxiv.org/abs/2301.10491) |
+| Antiglitch (Blip, Tomte, Blip_Low_Frequency, Koi_Fish: log-normal bump in frequency), ported from the Antiglitch repository | `antiglitch.py` (`antiglitch_glitch`) | [Antiglitch](https://github.com/andrew-lundgren/antiglitch) `antiglitch/model.py`, MIT, [arXiv:2309.06594](https://arxiv.org/abs/2309.06594) |
 
 The differences from each original are listed in the module docstrings.
 

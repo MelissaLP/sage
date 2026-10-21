@@ -6,6 +6,8 @@
   formulas evaluated with the same parameters.
 - sage.data.noise.scattered_light: ArchEnemy's arch model, against the paper's equation on
   ArchEnemy's time grid.
+- sage.data.noise.antiglitch: Antiglitch's glitch model, against its ``fglitch_from_sample`` on
+  its own grid (1/8 s at 8192 Hz).
 """
 
 import collections
@@ -19,6 +21,7 @@ import scipy.signal
 import torch
 
 from sage.data.noise import glitch_bank
+from sage.data.noise.antiglitch import antiglitch_glitch
 from sage.data.noise.analytic_glitches import (
     ANALYTIC_GLITCHES,
     analytic_glitch,
@@ -222,6 +225,47 @@ def test_scattered_light_injects_and_checks_fit():
         scattered_light_arch(1, fs, duration=4.0, timeperiod=5.0, t0=1.0)
 
 
+# -- Antiglitch -----------------------------------------------------------------------------
+
+def test_antiglitch_matches_fglitch_from_sample():
+    fs, n = 8192.0, 1024
+    h, p = antiglitch_glitch(4, fs, duration=n / fs, t0=(0.06, 0.065), generator=torch.Generator().manual_seed(0),
+                             dtype=torch.float64, return_params=True)
+    freqs = np.linspace(0, 4096, 513)                   # Antiglitch's grid
+    for i in range(4):
+        f0, gbw, t0, phi = (float(p[k][i]) for k in ("f0", "gbw", "t0", "phi"))
+        # Antiglitch: amp * fsignal * exp(-2 pi i time f), time from the centre (its ``center``)
+        with np.errstate(divide="ignore"):
+            fsignal = np.exp(-0.5 * gbw * (np.log(freqs) - np.log(f0)) ** 2)
+        amp = np.exp(1j * (phi - np.pi / 2))
+        ref = np.roll(np.fft.irfft(amp * fsignal * np.exp(-2j * np.pi * (t0 - n / fs / 2) * freqs), n), n // 2)
+        np.testing.assert_allclose(h[i].numpy(), ref / np.abs(ref).max(), atol=1e-12)
+
+
+def test_antiglitch_phase_and_injection():
+    fs = 4096.0
+    h = antiglitch_glitch(1, fs, duration=1.0, f0=60.0, gbw=2.0, t0=0.5, phi=math.pi / 2, dtype=torch.float64)
+    torch.testing.assert_close(h[0, 2048 - 400:2048], h[0, 2049:2049 + 400].flip(0))    # symmetric about t0
+    assert h[0].abs().argmax().item() == 2048
+    glitch = antiglitch_glitch(2, fs, duration=1.0, t0=0.5, dtype=torch.float64).view(1, 2, -1)
+    strain = torch.zeros(1, 2, 16384, dtype=torch.float64)
+    out = GlitchInjector(fs, f_low=20.0)(strain, glitch, torch.ones(8193, dtype=torch.float64),
+                                         snr=torch.tensor([[8.0, 12.0]]))
+    torch.testing.assert_close(glitch_snr(out, fs), torch.tensor([[8.0, 12.0]], dtype=torch.float64))
+
+
+def test_population_antiglitch_class():
+    """Swapping a class's generator for antiglitch_glitch is a config change only."""
+    cfg = {"sample_rate": 4096.0, "classes": {"Blip": {
+        "generator": "antiglitch_glitch", "rate": 1.0, "f0": [12.0, 260.0], "gbw": [0.29, 4.2],
+        "log_uniform": ["f0", "gbw"], "phases": [0.0, math.pi], "duration": 0.5}}}
+    glitch, params = GlitchPopulation(cfg).sample("Blip", 64, torch.Generator().manual_seed(1), dtype=torch.float64)
+    assert glitch.shape == (64, 2048) and set(params) >= {"f0", "gbw", "t0", "phi", "snr", "phase"}
+    assert (params["t0"] == 0.25).all() and 12.0 <= float(params["f0"].min()) <= float(params["f0"].max()) <= 260.0
+    with pytest.raises(ValueError):
+        GlitchPopulation({"sample_rate": 4096.0, "classes": {"Blip": {"generator": "antiglitch_glitch", "q": 3.0}}})
+
+
 # -- glitch population (GWForge-style config) ------------------------------------------------
 
 from pathlib import Path
@@ -251,7 +295,8 @@ def test_population_config_classes():
     for name, c in pop.classes.items():
         glitch, params = pop.sample(name, 3, g, dtype=torch.float64)
         assert glitch.shape == (3, int(round(c["duration"] * 4096))) and torch.isfinite(glitch).all()
-        assert ((params["snr"] >= 5) & (params["snr"] <= 200)).all()
+        low, high = c["snr_range"]
+        assert ((params["snr"] >= low) & (params["snr"] <= high)).all()
     # Blip phase 0 or pi in GWForge's cosine convention: symmetric about the centre
     glitch, params = pop.sample("Blip", 4, g, dtype=torch.float64)
     assert set(params["phase"].tolist()) <= {0.0, math.pi}
@@ -353,15 +398,16 @@ def test_population_log_uniform_weights_and_probability():
     g = torch.Generator().manual_seed(9)
     _, params = pop.sample("Blip", 20000, g, dtype=torch.float64)
     logf = torch.log(params["f0"])
-    assert float(params["f0"].min()) >= 50.0 and float(params["f0"].max()) <= 500.0
-    assert float(logf.mean()) == pytest.approx(0.5 * (math.log(50) + math.log(500)), rel=0.01)
+    assert float(params["f0"].min()) >= 12.0 and float(params["f0"].max()) <= 260.0
+    assert float(logf.mean()) == pytest.approx(0.5 * (math.log(12) + math.log(260)), rel=0.01)
+    assert float(torch.log(params["gbw"]).mean()) == pytest.approx(0.5 * (math.log(0.29) + math.log(4.2)), abs=0.02)
     # dense mode: class mix from the per-detector rates; McGAN classes (rate 0) never drawn
     cfg = dict(__import__("yaml").safe_load(CONFIG.read_text()), glitches_per_segment=[50, 50])
     dense = GlitchPopulation(cfg)
     torch.testing.assert_close(dense.weights("L1")[1], torch.tensor(6.276, dtype=torch.float64))
     cls = collections.Counter(e["cls"] for _ in range(40) for e in dense.draw(4.0, "L1", g))
     assert cls["Ringdown"] == cls["WhiteNoiseBurst"] == cls["GaussianBlip"] == 0
-    assert cls["Tomte"] / sum(cls.values()) == pytest.approx(6.276 / (0.655 + 6.276 + 2.504 + 1.898), rel=0.1)
+    assert cls["Tomte"] / sum(cls.values()) == pytest.approx(6.276 / (0.655 + 6.276 + 2.504 + 1.898 + 1.434), rel=0.1)
     half = GlitchPopulation(dict(cfg, segment_probability=0.5))
     empty = sum(len(half.draw(4.0, "L1", g)) == 0 for _ in range(400))
     assert empty == pytest.approx(200, abs=40)

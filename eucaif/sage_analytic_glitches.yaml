@@ -11,7 +11,11 @@
 #
 # Keys of a class:
 #   generator   analytic generator in sage.data.noise: sine_gaussian, ringdown, white_noise_burst,
-#               gaussian_blip, scattered_light_arch
+#               gaussian_blip, antiglitch_glitch, scattered_light_arch
+#
+# Blip, Tomte, BlipLowFrequency and KoiFish use antiglitch_glitch, ported from the Antiglitch
+# repository (A. Lundgren, https://github.com/andrew-lundgren/antiglitch, MIT; arXiv:2309.06594);
+# their f0 and gbw ranges are the 5th-95th percentiles of Antiglitch's fits to O3 glitches.
 #   rate        mean number per hour per detector (Poisson count, uniform times, as GWForge),
 #               a number or one per detector; in dense mode (glitches_per_segment) the class mix
 #   snr_range   optimal SNR against the detector's ASD, p(snr) ~ snr**-snr_index on snr_range
@@ -23,7 +27,7 @@
 #   parameters  [low, high] or a fixed value, with the generator's own names
 #
 # Not modelled: Fast_Scattering (7.6/h at L1, the most common L1 class), Low_Frequency_Burst
-# (5.8/h at H1), Koi_Fish, Whistle, Extremely_Loud: no analytic shape for them here.
+# (5.8/h at H1), Whistle, Extremely_Loud: no analytic shape for them here.
 
 detectors: [H1, L1]
 sample_rate: 4096.0
@@ -34,11 +38,13 @@ classes:
     # GWForge's Blip: short broadband bursts, O(10) ms (Cabero et al. 2019, arXiv:1901.05093);
     # symmetric, phase 0 or pi (Antiglitch, arXiv:2309.06594). Gravity Spy O3a: 1.30/h at H1,
     # 0.66/h at L1; peak frequency 93-412 Hz at H1, 111-630 Hz at L1; SNR index 2.32.
-    generator: sine_gaussian
+    # Shape: Antiglitch's model, f0 and gbw the 5th-95th percentiles of its fits to 1206 O3 Blips
+    # (f0 is the bump's centre in strain; the whitened peak is higher, 65-243 Hz in the fits).
+    generator: antiglitch_glitch
     rate: {H1: 1.299, L1: 0.655}
-    f0: [50.0, 500.0]
-    q: [2.0, 6.0]
-    log_uniform: [f0]
+    f0: [12.0, 260.0]
+    gbw: [0.29, 4.2]
+    log_uniform: [f0, gbw]
     phases: [0.0, 3.141592653589793]
     snr_range: [5.0, 200.0]
     snr_index: 2.3
@@ -48,25 +54,26 @@ classes:
     # GWForge's Tomte: triangular bursts of ~0.25 s, most power below 64 Hz (Glanzer et al. 2023,
     # arXiv:2208.12849); symmetric, phase pi. Gravity Spy O3a: 0.22/h at H1, 6.28/h at L1; peak
     # frequency 32-61 Hz; SNR index 2.39 (GWForge: 2.0-2.4, uses 2.2).
-    generator: sine_gaussian
+    # Shape: Antiglitch's model, 5th-95th percentiles of its fits to 686 O3 Tomtes.
+    generator: antiglitch_glitch
     rate: {H1: 0.223, L1: 6.276}
-    f0: [30.0, 65.0]
-    q: [4.0, 12.0]
-    log_uniform: [f0]
+    f0: [12.0, 26.0]
+    gbw: [1.4, 7.0]
+    log_uniform: [f0, gbw]
     phases: [3.141592653589793]
     snr_range: [5.0, 200.0]
     snr_index: 2.2
     duration: 1.0
 
   BlipLowFrequency:
-    # Gravity Spy's Blip_Low_Frequency, modelled as a Blip at lower frequency (our assumption: the
-    # Blip's Q and phases). O3a: 0.45/h at H1, 2.50/h at L1; peak frequency 38-125 Hz; SNR index
-    # 4.81 (most are close to Omicron's threshold).
-    generator: sine_gaussian
+    # Gravity Spy's Blip_Low_Frequency, with the Blip's phases (our assumption). O3a: 0.45/h at H1,
+    # 2.50/h at L1; peak frequency 38-125 Hz; SNR index 4.81 (most are close to Omicron's threshold).
+    # Shape: Antiglitch's model, 5th-95th percentiles of its fits to 786 O3 Blip_Low_Frequency.
+    generator: antiglitch_glitch
     rate: {H1: 0.451, L1: 2.504}
-    f0: [38.0, 125.0]
-    q: [2.0, 6.0]
-    log_uniform: [f0]
+    f0: [12.0, 48.0]
+    gbw: [0.61, 6.4]
+    log_uniform: [f0, gbw]
     phases: [0.0, 3.141592653589793]
     snr_range: [5.0, 200.0]
     snr_index: 4.8
@@ -84,6 +91,20 @@ classes:
     snr_range: [5.0, 200.0]
     snr_index: 2.4
     duration: 3.6
+
+  KoiFish:
+    # Gravity Spy's Koi_Fish: loud, broadband bursts. O3a: 2.28/h at H1, 1.43/h at L1; peak
+    # frequency 40-269 Hz at H1, 32-412 Hz at L1; SNR index 1.35, Omicron SNR 28-624 (5-95 %), so
+    # snr_range starts at 20. Random phase (no Gravity Spy or Antiglitch preference assumed).
+    # Shape: Antiglitch's model, 5th-95th percentiles of its fits to 1196 O3 Koi_Fish.
+    generator: antiglitch_glitch
+    rate: {H1: 2.281, L1: 1.434}
+    f0: [10.0, 168.0]
+    gbw: [0.31, 7.5]
+    log_uniform: [f0, gbw]
+    snr_range: [20.0, 1000.0]
+    snr_index: 1.35
+    duration: 0.5
 
   # McGAN's training shapes (McGinn et al. 2021, CQG 38 155005): no Gravity Spy counterpart, so
   # rate 0 (never drawn). Give them a rate or a weight to use them.

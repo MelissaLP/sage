@@ -46,6 +46,7 @@ from .analytic_glitches import (
     sine_gaussian,
     white_noise_burst,
 )
+from .antiglitch import antiglitch_glitch
 from .scattered_light import scattered_light_arch
 from .glitch_population import GlitchPopulation, power_law_snr
 from .lowfar_noise import StartTimeDataset
@@ -77,6 +78,7 @@ __all__ = [
     "ringdown",
     "sine_gaussian",
     "white_noise_burst",
+    "antiglitch_glitch",
     "scattered_light_arch",
     "GlitchPopulation",
     "power_law_snr",

@@ -23,7 +23,7 @@ Documentation:
     - the optimal SNR follows p(snr) ~ snr**-snr_index on snr_range (log-uniform for index 1,
       uniform for index 0), drawn by inverse CDF;
     - ``phases`` are in GWForge's cosine convention, h ~ cos(2 pi f0 (t - t0) + phase). SAGE's
-      sine-Gaussian and ringdown use a sine, so phi = phase + pi / 2 is passed to them.
+      sine-Gaussian, ringdown and Antiglitch shapes use a sine, so phi = phase + pi / 2 is passed to them.
 
     Shapes come from ``analytic_glitches`` and ``scattered_light``, centred in an array of
     ``duration`` seconds. ``inject`` does what ``add_glitch`` does for each glitch (taper, place,
@@ -51,12 +51,13 @@ import torch
 from torch import Tensor
 
 from .analytic_glitches import ANALYTIC_GLITCHES
+from .antiglitch import antiglitch_glitch
 from .glitch_noise import _band_mask, _resample_asd, place_glitch, tukey_window
 from .scattered_light import scattered_light_arch
 
-GENERATORS = dict(ANALYTIC_GLITCHES, scattered_light_arch=scattered_light_arch)
+GENERATORS = dict(ANALYTIC_GLITCHES, antiglitch_glitch=antiglitch_glitch, scattered_light_arch=scattered_light_arch)
 CLASS_KEYS = {"generator", "rate", "weight", "snr_range", "snr_index", "phases", "duration", "log_uniform"}
-PHASED = {"sine_gaussian", "ringdown"}
+PHASED = {"sine_gaussian", "ringdown", "antiglitch_glitch"}
 
 
 def power_law_snr(n: int, snr_range, snr_index: float, generator: torch.Generator = None) -> Tensor:

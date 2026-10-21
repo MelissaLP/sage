@@ -14,7 +14,7 @@ h5py, as for v1.
 | | v1 | v2 |
 |---|---|---|
 | Content | noise, or noise + BBH (50 / 50) | the same, plus glitches in both classes |
-| Glitches | none | Blip, Tomte, Blip_Low_Frequency, Scattered_Light (analytic), O3a class mix; plus one non-physical (McGAN) glitch per frame and detector |
+| Glitches | none | Blip, Tomte, Blip_Low_Frequency, Koi_Fish, Scattered_Light (analytic), O3a class mix; plus one non-physical (McGAN) glitch per frame and detector |
 | Stored window | 2 s | 4 s: 1 s + **2 s frame** + 1 s, so Q-transforms can be cut to the frame |
 | `tc` | from the window start, in [0.5, 1.5] s | from the stored window start, in [1.5, 2.5] s (the same place in the frame) |
 | Targets | label, BBH parameters, SNR | also the whitened glitches and the whitened BBH alone, per detector |
@@ -72,14 +72,21 @@ and recomputes everything; it reproduces GWForge's published Blip and Tomte numb
 
 | Class (model) | H1 / hour | L1 / hour | Peak frequency | SNR index |
 |---|---|---|---|---|
-| Blip (sine-Gaussian, GWForge) | 1.30 | 0.66 | 93-630 Hz | 2.3 |
-| Tomte (sine-Gaussian, GWForge) | 0.22 | 6.28 | 32-61 Hz | 2.2-2.4 |
-| Blip_Low_Frequency (sine-Gaussian, Blip's Q) | 0.45 | 2.50 | 38-125 Hz | 4.8 |
+| Blip (Antiglitch) | 1.30 | 0.66 | 93-630 Hz | 2.3 |
+| Tomte (Antiglitch) | 0.22 | 6.28 | 32-61 Hz | 2.2-2.4 |
+| Blip_Low_Frequency (Antiglitch) | 0.45 | 2.50 | 38-125 Hz | 4.8 |
+| Koi_Fish (Antiglitch) | 2.28 | 1.43 | 32-412 Hz | 1.35 |
 | Scattered_Light (ArchEnemy arch) | 3.03 | 1.90 | 18-38 Hz | 2.4 |
+
+The Antiglitch classes are ported from the [Antiglitch repository](https://github.com/andrew-lundgren/antiglitch)
+(A. Lundgren, MIT; [arXiv:2309.06594](https://arxiv.org/abs/2309.06594)): its glitch model, in torch, with
+the 5th-95th percentiles of its fits to O3 glitches as parameter ranges (`sage/data/noise/antiglitch.py`).
+The release `eucaif-dataset-v2.0` used GWForge's sine-Gaussians for Blip, Tomte and Blip_Low_Frequency,
+and had no Koi_Fish; `eucaif-dataset-v2.1` uses Antiglitch for all four.
 
 In the dense mode used here (`per_window`), these rates set the **class mix per detector**: L1 gets
 mostly Tomtes, H1 mostly scattered light. Not modelled (no analytic shape): Fast_Scattering
-(7.6 / h at L1), Low_Frequency_Burst (5.8 / h at H1), Koi_Fish, Whistle, Extremely_Loud.
+(7.6 / h at L1), Low_Frequency_Burst (5.8 / h at H1), Whistle, Extremely_Loud.
 
 ## Training on the fly
 
@@ -138,7 +145,7 @@ n_glitches          (N, 2)        glitches per example and detector
 glitches/example    one row per glitch: example index, detector index, class index (attrs glitch_classes),
 glitches/...        time (s from the stored-window start), snr, and the generator parameters
 attrs               v1's, plus eucaif_v2_config (the full YAML), frame_slice, glitch_population,
-                    dataset_version = "eucaif v2"
+                    dataset_version = "eucaif v2.1" ("eucaif v2" in v2.0 files)
 ```
 
 About 0.13 MB per example in float32 (strain and glitches): 10,000 examples are ~1.3 GB.
@@ -146,8 +153,9 @@ About 0.13 MB per example in float32 (strain and glitches): 10,000 examples are 
 ## Reproducibility and version
 
 Data are determined by the code version, the config, the seed and the command, all stored in the
-file. Cite the tagged release **`eucaif-dataset-v2.0`** of https://github.com/MelissaLP/sage and
+file. Cite the tagged release **`eucaif-dataset-v2.1`** of https://github.com/MelissaLP/sage and
 generate published files from a clean checkout of it, so `sage_version` in the file is the tag.
+Files made with `eucaif-dataset-v2.0` (sine-Gaussian Blips, no Koi_Fish) regenerate from that tag.
 
 ## Caveats
 
