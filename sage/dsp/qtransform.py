@@ -501,25 +501,37 @@ class QTransform(torch.nn.Module):
         return int(torch.argmin((self.qs - float(q)).abs()))
 
     def _tile_operator(self, p: int, device):
-        """Plane ``p`` on its common time grid: gather indices and windows, (R, ncols) each.
+        """Plane ``p`` on its common time grid: gather indices and windows, (R, ncols) each; the
+        same entries without the zeros, as grid positions, gather indices and windows, (R, wmax)
+        each; and ``coverage``.
 
         Every row's windowed bins are zero-padded to ``ncols`` (the plane's largest ``ntiles``)
         with gwpy's centring, i.e. band-limited interpolation of its tiles onto one time grid;
-        the window is scaled by ncols / ntiles so the tiles keep gwpy's amplitudes.
+        the window is scaled by ncols / ntiles so the tiles keep gwpy's amplitudes. The windowed
+        bins are a few % of the grid, so ``inverse`` only reads those (rows shorter than ``wmax``
+        are filled with zero windows).
         """
         key = (p, str(device), self.dtype)
         if key not in self._tile_ops:
             rows = self._plane_rows[p][1]
             ncols = max(r[0] for r in rows)
+            wmax = max(r[1].size for r in rows)
             gidx = np.zeros((len(rows), ncols), dtype=np.int64)
             gwin = np.zeros((len(rows), ncols))
+            spos = np.zeros((len(rows), wmax), dtype=np.int64)
+            sidx = np.zeros((len(rows), wmax), dtype=np.int64)
+            swin = np.zeros((len(rows), wmax))
             for i, (ntiles, idx, win) in enumerate(rows):
                 pad_left = int((ncols - idx.size - 1) / 2.0)
                 pos = (pad_left + np.arange(idx.size) - ncols // 2) % ncols   # after ifftshift
-                gidx[i, pos] = idx
-                gwin[i, pos] = win * ncols / ntiles
-            self._tile_ops[key] = (torch.tensor(gidx, device=device),
-                                   torch.tensor(gwin, dtype=self.dtype, device=device))
+                gidx[i, pos] = sidx[i, :idx.size] = idx
+                gwin[i, pos] = swin[i, :idx.size] = win * ncols / ntiles
+                spos[i, :idx.size] = pos
+            den = np.zeros(self.seq_len // 2 + 1)
+            np.add.at(den, sidx.ravel(), swin.ravel() ** 2)
+            self._tile_ops[key] = tuple(torch.tensor(a, dtype=None if a.dtype == np.int64 else self.dtype,
+                                                     device=device)
+                                        for a in (gidx, gwin, spos, sidx, swin, den))
         return self._tile_ops[key]
 
     def tile_frequencies(self, q: float) -> Tensor:
@@ -534,9 +546,7 @@ class QTransform(torch.nn.Module):
     def coverage(self, q: float) -> Tensor:
         """Sum over rows of the squared windows on each rfft bin; ``inverse`` recovers the bins
         above ``rcond`` times its maximum."""
-        idx, win = self._tile_operator(self.plane_index(q), torch.device("cpu"))
-        den = torch.zeros(self.seq_len // 2 + 1, dtype=self.dtype)
-        return den.index_add_(0, idx.reshape(-1), (win ** 2).reshape(-1))
+        return self._tile_operator(self.plane_index(q), torch.device("cpu"))[-1].clone()
 
     def tiles(self, x: Tensor, q: float) -> Tensor:
         """Complex Q-tiles of the plane nearest ``q``, on one time grid: (..., T) -> (..., R, ncols).
@@ -552,7 +562,7 @@ class QTransform(torch.nn.Module):
         with grad:
             lead = x.shape[:-1]
             X = self._fft(x.to(dtype=self.dtype).reshape(-1, self.seq_len))
-            idx, win = self._tile_operator(self.plane_index(q), x.device)
+            idx, win = self._tile_operator(self.plane_index(q), x.device)[:2]
             Z = torch.fft.ifft(X[:, idx] * win, dim=-1)                  # (M, R, ncols)
             return Z.reshape(*lead, *Z.shape[-2:])
 
@@ -568,17 +578,17 @@ class QTransform(torch.nn.Module):
         """
         grad = contextlib.nullcontext() if self.differentiable else torch.no_grad()
         with grad:
-            idx, win = self._tile_operator(self.plane_index(q), tiles.device)
-            if tiles.shape[-2:] != idx.shape:
-                raise ValueError(f"Expected tiles of shape (..., {idx.shape[0]}, {idx.shape[1]}) for "
+            grid, _, pos, idx, win, den = self._tile_operator(self.plane_index(q), tiles.device)
+            if tiles.shape[-2:] != grid.shape:
+                raise ValueError(f"Expected tiles of shape (..., {grid.shape[0]}, {grid.shape[1]}) for "
                                  f"Q = {float(self.qs[self.plane_index(q)]):.2f}, got {tuple(tiles.shape)}")
             lead = tiles.shape[:-2]
-            Y = torch.fft.fft(tiles.reshape(-1, *idx.shape), dim=-1) * win    # (M, R, ncols)
+            Y = torch.fft.fft(tiles.reshape(-1, *grid.shape), dim=-1)          # (M, R, ncols)
+            rows = torch.arange(grid.shape[0], device=Y.device)[:, None]
+            Y = Y[:, rows, pos] * win                                            # windowed bins, (M, R, wmax)
             nbins = self.seq_len // 2 + 1
             num = torch.zeros(Y.shape[0], nbins, 2, dtype=self.dtype, device=Y.device)
             num = num.index_add(1, idx.reshape(-1), torch.view_as_real(Y).reshape(Y.shape[0], -1, 2))
-            den = torch.zeros(nbins, dtype=self.dtype, device=Y.device)
-            den = den.index_add(0, idx.reshape(-1), (win ** 2).reshape(-1))
             band = den > rcond * den.max()
             X = torch.view_as_complex(num) * torch.where(band, 1.0 / torch.where(band, den, torch.ones_like(den)),
                                                          torch.zeros_like(den))
