@@ -112,6 +112,78 @@ What this shows (the answer depends on the task):
 - **ml4gw has a fixed cost of about 0.55-0.9 s per call on MPS** for `QScan` (even at batch 1),
   probably from synchronising the GPU when comparing the planes.
 
+### At Nikhef: CUDA GPU and two CPU nodes (2 kHz setup)
+
+The same 2 kHz command (8 s at 8192 Hz, 10-2000 Hz, `--skip spline`) was run on two machines with
+torch 2.1.2+cu121. The first was a GPU worker node, `wn-lot-001`: a Quadro GV100, 64 CPUs and 32
+torch threads, run with `--devices cpu cuda`. The second was the interactive node `stbc-i1`: 32
+CPUs, 24 torch threads, run with `--devices cpu`. The table gives milliseconds per series at batch
+64, as CUDA / CPU `wn-lot-001` / CPU `stbc-i1`; gwpy is CPU only.
+
+| Task | SAGE | ml4gw | QTAM | gwpy (CPU) | STFT |
+|---|---|---|---|---|---|
+| `scan` | **1.3** / 117 / 143 | 3.5 / 20 / 77 | 1.9 / 9.1 / 67 | 274 / 376 | 0.12 / 1.2 / 1.7 |
+| `singleq` | 0.46 / 61 / 170 | 0.59 / 4.5 / 16 | 0.29 / 1.5 / 4.4 | 90 / 130 | – |
+| `tiles` | 0.28 / 1.9 / 2.9 | 0.20 / 0.79 / 4.2 | 1.1 / 10 / 16 (full), 0.52 / 4.1 / 18 (`num_time`) | 35 / 58 | – |
+| `roundtrip` | **0.54** / 19 / 15 | – | 2.2 / 27 / 23 (full), 3.0 / 25 / 47 (`num_time`) | – | 0.24 / 2.8 / 4.3 |
+| `bestq` | **0.54** / 4.7 / 16 | 3.2 / 17 / 84 | – | 299 / 250 | – |
+
+The checks were the same as on the Mac. SAGE's images and tiles match gwpy to 0.6-4.4e-6 (CUDA at
+the upper end), its Q matches gwpy's for 100% of the series against ml4gw's 50%, and every round
+trip reconstructs to 1e-7 to 9e-7. ml4gw's images stay about 0.9 from gwpy's.
+
+- **On the GPU, SAGE is the fastest Q-transform for the Q-scan, the Q choice and the round trip.**
+  - The Q-scan takes 1.3 ms against 1.9 ms for QTAM (which skips the median) and 3.5 ms for ml4gw.
+  - `best_q` is 6x faster than ml4gw's per-batch choice.
+  - The round trip is 4x faster than QTAM and 2.3x slower than STFT + iSTFT.
+  - Against gwpy's CPU loop, SAGE is 130-550x faster, while giving gwpy's numbers.
+  - For raw tiles ml4gw is slightly faster (0.20 vs 0.28 ms); for a single-Q image QTAM is
+    (0.29 vs 0.46 ms).
+- **The GV100 is 5-7x faster than the Mac's GPU (MPS)** for SAGE: the Q-scan takes 1.3 ms against
+  9.0, the round trip 0.54 ms against 2.7. QTAM's round trip fits in its memory, while it did not
+  fit on MPS.
+- **On CPU, two results hold on both nodes.** `best_q` is 3.7-5x faster than ml4gw, and SAGE has
+  the fastest invertible round trip, though by only 1.3-1.6x over QTAM.
+- **SAGE's `forward` is slow on these CPUs, and this needs a follow-up.** The Q-scan takes 117-143
+  ms per series, against 37 ms on the 4-core Mac. On `stbc-i1` the single-Q image (170 ms) is even
+  slower than gwpy's loop (130 ms). Images from ml4gw and QTAM are 2-40x faster on these nodes.
+- **The CPU timings are noisy.** Several methods are faster per call at batch 64 than at batch 16,
+  and the same code runs 2-4x apart on the two nodes. Both nodes are shared, and torch used 24-32
+  threads. So the CPU numbers rank the methods only roughly.
+- **To do:** rerun the CPU job with `OMP_NUM_THREADS=4` and `8` on a reserved node, to see whether
+  thread oversubscription or the older torch (2.1.2 here, 2.10 on the Mac) explains the slow
+  `forward`.
+
+The CPU-only run wrote into the GPU run's `results_2khz/`, which replaced its JSON and CPU
+figure. The numbers above are taken from the two terminal logs. `qtransform_benchmark_cuda.png`
+is the GPU run's figure.
+
+## What the images look like: every glitch model
+
+![Every glitch model in each transform](figures/glitch_transforms.png)
+
+The figure shows one glitch of every class at SNR 20 in white noise, at 4096 Hz:
+- the analytic classes of `sage_analytic_glitches.yaml` and `_dense.yaml`: Antiglitch's Blip,
+  Tomte, Blip_Low_Frequency and Koi_Fish; ArchEnemy's scattered-light arch; McGAN's ringdown,
+  white-noise burst, Gaussian blip and sine-Gaussian;
+- a gengli blip.
+
+Each row shows the time series and the Q-scan image of each method, using the `scan` settings
+(Q in [4, 64], 10-1000 Hz). gwpy, SAGE and ml4gw share one colour scale per row; QTAM and the STFT
+use their own. Made by `eucaif/example_glitch_transforms.py` (commands below).
+
+- **SAGE is gwpy's image** (largest difference 3-7e-7 of the peak) and picks the same Q for every
+  glitch.
+- **ml4gw picks the same Q here**, because each series is its own batch. Its image looks like
+  gwpy's but differs by 10-30% of the peak, because it uses bicubic resizing instead of gwpy's
+  spline. The benchmark's 0.9 also includes the Q chosen for a whole mixed batch.
+- **QTAM picks Q = 45.3 for every glitch.** It ranks the planes by total energy without
+  normalising by the median, and the highest-Q plane won for all ten glitches here. Short glitches then smear into
+  long horizontal bands: see Blip_Low_Frequency, Gaussian blip and the gengli blip.
+- **The STFT's 64-sample window** (16 ms, about 256 Hz wide) gives short glitches a sharp time
+  profile but almost no frequency structure at low frequency. The scattered-light arch at about 20 Hz
+  is invisible in it.
+
 ## Reproduce, with figures
 
 ```bash
@@ -120,6 +192,7 @@ python eucaif/benchmark_qtransform.py --task all --outdir results/              
 python eucaif/benchmark_qtransform.py --task all --duration 8 --sample-rate 8192 --frange 10 2000 \
     --batches 1 16 64 --skip spline --outdir results_2khz/                             # 2 kHz setup
 python eucaif/benchmark_qtransform.py --plot-only results/qtransform_benchmark.json    # redraw only
+python eucaif/example_glitch_transforms.py --outdir eucaif/figures/                    # glitch images
 ```
 
 `--outdir` saves every timing and check to `qtransform_benchmark.json` and draws **one figure per
@@ -148,8 +221,9 @@ bundled helper as a top-level module), so `pip install --no-deps qtam` is enough
 
 ## Caveats
 
-- The timings above come from a 4-core, 8 GB virtual Mac. CUDA GPUs and larger machines will rank
-  the Python row loops (ml4gw, QTAM) and the out-of-memory cases differently; run the script there.
+- The first two tables come from a 4-core, 8 GB virtual Mac, and the Nikhef table from shared
+  nodes. Each machine ranks the Python row loops (ml4gw, QTAM) and the out-of-memory cases
+  differently, so compare methods within one machine.
 - The data are white noise with sine-Gaussian glitches. Run time does not depend on the data,
   except through which Q-plane gets chosen.
 - Speed only. How well each representation supports glitch removal is measured separately, with
