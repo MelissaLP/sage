@@ -184,10 +184,59 @@ use their own. Made by `eucaif/example_glitch_transforms.py` (commands below).
   profile but almost no frequency structure at low frequency. The scattered-light arch at about 20 Hz
   is invisible in it.
 
+## Installing the comparison libraries
+
+SAGE's `pyproject.toml` covers SAGE itself, gwpy included. ml4gw and QTAM are needed only for
+the comparisons: `benchmark_qtransform.py`, `example_glitch_transforms.py`,
+`compare_glitch_extraction.py` and `residual_snr_by_class.py`. Each of these scripts skips a
+library that is missing.
+
+```bash
+conda create -n sage-compare python=3.11       # ml4gw needs Python >= 3.11 (< 3.15)
+conda activate sage-compare
+pip install -e .                               # SAGE, from the repo root
+pip install ml4gw                              # 0.8.5 tested; needs torch < 2.11
+pip install --no-deps qtam                     # 0.3.1 tested
+```
+
+- **On a CUDA machine, install torch for your CUDA version first**, following
+  pytorch.org. Otherwise pip may pull a CPU-only or mismatched build. ml4gw also brings
+  `torchaudio`, which must match torch.
+- **`--no-deps` for QTAM.** Its dependencies (torch, numpy, scipy, matplotlib, pandas, gwpy,
+  torchaudio) are already installed by SAGE and ml4gw. Its `full` extra asks for a
+  `torch_spline_interpolation` that is not on PyPI.
+
+**The QTAM patch.** QTAM 0.3.1 bundles its spline helper as the subpackage
+`qtam/torch_spline_interpolation_1_0_0`. However, `QTAM.py` and `QTAM_Scan.py` import it as a
+top-level module, so `import qtam` fails with `ModuleNotFoundError: No module named
+'torch_spline_interpolation_1_0_0'`. There are two ways around it:
+
+1. **Nothing to do for our scripts.** They put QTAM's own folder on `sys.path` before importing
+   it. Use the same two lines in your own code:
+
+   ```python
+   import importlib.util, os, sys
+   sys.path.insert(0, os.path.dirname(importlib.util.find_spec("qtam").origin))
+   from qtam import QScanMulti, SingleQTransform
+   ```
+
+2. **Or patch the installed package once**, making the two imports relative:
+
+   ```bash
+   QTAM=$(python -c "import importlib.util, os; print(os.path.dirname(importlib.util.find_spec('qtam').origin))")
+   sed -i.bak 's/^from torch_spline_interpolation_1_0_0 import/from .torch_spline_interpolation_1_0_0 import/' \
+       "$QTAM/QTAM.py" "$QTAM/QTAM_Scan.py"
+   python -c "from qtam import QScanMulti, SingleQTransform; print('qtam ok')"
+   ```
+
+   The `.bak` files keep the originals. Reinstalling QTAM undoes the patch.
+
+QTAM is GPL-3.0. SAGE only imports it for these comparisons and does not depend on it.
+
 ## Reproduce, with figures
 
 ```bash
-# from the SAGE repo root; ml4gw needs Python >= 3.11; QTAM: pip install --no-deps qtam
+# from the SAGE repo root, with ml4gw and QTAM installed as above
 python eucaif/benchmark_qtransform.py --task all --outdir results/                      # DeepExtractor setup
 python eucaif/benchmark_qtransform.py --task all --duration 8 --sample-rate 8192 --frange 10 2000 \
     --batches 1 16 64 --skip spline --outdir results_2khz/                             # 2 kHz setup
@@ -216,8 +265,7 @@ the job was given); the figure's footnote records it.
 `--skip` leaves out methods by name (`spline`, `QTAM`, `gwpy`, ...). ml4gw's spline interpolation
 builds large matrices and was killed for lack of memory at 8 s here; it also fails on MPS
 (`torch.linalg.solve`: singular matrix). Methods that fail or run out of memory are reported as
-such and the run continues. The script works around an import bug in QTAM 0.3.1 (it imports a
-bundled helper as a top-level module), so `pip install --no-deps qtam` is enough.
+such and the run continues. The script works around QTAM's import bug itself (see the QTAM patch above).
 
 ## Caveats
 
