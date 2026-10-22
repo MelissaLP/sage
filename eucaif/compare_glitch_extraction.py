@@ -288,8 +288,9 @@ def main():
         blip = np.load(args.blip_file)[args.blip_index]
     else:
         import gengli
-        blip = np.asarray(gengli.glitch_generator("L1").get_glitch(n_glitches=args.blip_index + 1,
-                                                                   srate=FS, seed=3))[args.blip_index]
+        # gengli squeezes its output: one glitch comes back as (L,), not (1, L)
+        blip = np.atleast_2d(gengli.glitch_generator("L1").get_glitch(n_glitches=args.blip_index + 1,
+                                                                      srate=FS, seed=3))[args.blip_index]
     blip = torch.tensor(blip, dtype=torch.float64)
     arch = scattered_light_arch(1, FS, DUR, fringe_frequency=40.0, timeperiod=4.0, dtype=torch.float64,
                                 generator=torch.Generator().manual_seed(args.seed))[0]
