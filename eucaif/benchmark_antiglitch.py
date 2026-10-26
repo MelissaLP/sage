@@ -1,8 +1,8 @@
 """
 Benchmark the Antiglitch glitch model against the sine-Gaussian Blip SAGE uses now:
 
-- ``sine_gaussian``      time domain, exp * sin on (n, L)              (analytic_glitches.py)
-- ``antiglitch_glitch``  frequency domain, log-normal bump + one irfft (antiglitch.py)
+- ``sine_gaussian``      time domain, exp * sin on (n, L)              (sage.data.noise.analytic_glitches)
+- ``antiglitch_glitch``  frequency domain, log-normal bump + one irfft (sage.data.noise.analytic_glitches)
 - Antiglitch reference   its numpy formula (``fglitch_from_sample``), one glitch at a time
 
 each alone and through ``GlitchPopulation.sample`` with the Blip class of

@@ -46,9 +46,10 @@ from .analytic_glitches import (
     ringdown,
     sine_gaussian,
     white_noise_burst,
+    antiglitch_glitch,
+    scattered_light_arch,
 )
-from .antiglitch import antiglitch_glitch
-from .scattered_light import scattered_light_arch
+from .gengli_glitches import gengli_glitch
 from .glitch_population import GlitchPopulation, power_law_snr
 from .lowfar_noise import StartTimeDataset
 from .split import split_observing_run, train_val_split
@@ -83,6 +84,7 @@ __all__ = [
     "white_noise_burst",
     "antiglitch_glitch",
     "scattered_light_arch",
+    "gengli_glitch",
     "GlitchPopulation",
     "power_law_snr",
     "StartTimeDataset",

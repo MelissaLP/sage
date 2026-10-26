@@ -28,9 +28,9 @@ def test_generator_mixes_noise_bbh_and_glitches():
     assert len(tab["example"]) == int(data["n_glitches"].sum())
     assert ((tab["time"] >= 0) & (tab["time"] <= 4.0)).all()
     # O3a classes, then the non-physical McGAN group: exactly one per (example, detector), Blip-like SNR
-    assert gen.glitch_classes == ["Blip", "Tomte", "BlipLowFrequency", "ScatteredLight",
+    assert gen.glitch_classes == ["Blip", "Tomte", "BlipLowFrequency", "ScatteredLight", "KoiFish",
                                   "Ringdown", "WhiteNoiseBurst", "GaussianBlip"]
-    nonphys = tab["class"] >= 4
+    nonphys = tab["class"] >= 5
     per_pair = np.zeros((12, 2), dtype=int)
     np.add.at(per_pair, (tab["example"][nonphys], tab["detector"][nonphys]), 1)
     assert (per_pair == 1).all()
@@ -80,7 +80,7 @@ def test_nonphysical_off_and_config_errors():
     cfg = load_config(CONFIG)
     cfg["nonphysical_glitches"]["probability"] = 0.0
     gen = make_generator(cfg, seed=4)
-    assert gen.glitch_classes == ["Blip", "Tomte", "BlipLowFrequency", "ScatteredLight"]
+    assert gen.glitch_classes == ["Blip", "Tomte", "BlipLowFrequency", "ScatteredLight", "KoiFish"]
     cfg["nonphysical_glitches"].update(probability=1.0, classes=["Koi_Fish"])
     with pytest.raises(ValueError):
         make_generator(cfg, seed=4)

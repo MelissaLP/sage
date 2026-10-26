@@ -25,7 +25,7 @@ Documentation:
     - ``phases`` are in GWForge's cosine convention, h ~ cos(2 pi f0 (t - t0) + phase). SAGE's
       sine-Gaussian, ringdown and Antiglitch shapes use a sine, so phi = phase + pi / 2 is passed to them.
 
-    Shapes come from ``analytic_glitches`` and ``scattered_light``, centred in an array of
+    Shapes come from ``analytic_glitches`` (and gengli's blips from ``gengli_glitches``), centred in an array of
     ``duration`` seconds. ``inject`` does what ``add_glitch`` does for each glitch (taper, place,
     band-limit and scale to its SNR, colour with the ASD), vectorised: each class is sampled once
     for the whole batch, glitches of the same length are processed together in the frequency domain
@@ -51,11 +51,10 @@ import torch
 from torch import Tensor
 
 from .analytic_glitches import ANALYTIC_GLITCHES
-from .antiglitch import antiglitch_glitch
+from .gengli_glitches import gengli_glitch
 from .glitch_noise import _band_mask, _resample_asd, place_glitch, tukey_window
-from .scattered_light import scattered_light_arch
 
-GENERATORS = dict(ANALYTIC_GLITCHES, antiglitch_glitch=antiglitch_glitch, scattered_light_arch=scattered_light_arch)
+GENERATORS = dict(ANALYTIC_GLITCHES, gengli_glitch=gengli_glitch)
 CLASS_KEYS = {"generator", "rate", "weight", "snr_range", "snr_index", "phases", "duration", "log_uniform"}
 PHASED = {"sine_gaussian", "ringdown", "antiglitch_glitch"}
 

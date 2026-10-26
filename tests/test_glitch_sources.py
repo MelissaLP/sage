@@ -4,10 +4,9 @@
   the same format (no 2.3 GB download); the download itself against a stub huggingface_hub.
 - sage.data.noise.analytic_glitches: the port of McGAN's analytic shapes, against McGAN's
   formulas evaluated with the same parameters.
-- sage.data.noise.scattered_light: ArchEnemy's arch model, against the paper's equation on
-  ArchEnemy's time grid.
-- sage.data.noise.antiglitch: Antiglitch's glitch model, against its ``fglitch_from_sample`` on
-  its own grid (1/8 s at 8192 Hz).
+  Also in that module: ArchEnemy's arch model, against the paper's equation on ArchEnemy's time
+  grid, and Antiglitch's glitch model, against its ``fglitch_from_sample`` on its own grid
+  (1/8 s at 8192 Hz).
 """
 
 import collections
@@ -21,18 +20,18 @@ import scipy.signal
 import torch
 
 from sage.data.noise import glitch_bank
-from sage.data.noise.antiglitch import antiglitch_glitch
 from sage.data.noise.analytic_glitches import (
     ANALYTIC_GLITCHES,
     analytic_glitch,
+    antiglitch_glitch,
     gaussian_blip,
     ringdown,
+    scattered_light_arch,
     sine_gaussian,
     white_noise_burst,
 )
 from sage.data.noise.glitch_bank import DeepExtractorGlitchBank, FILES
 from sage.data.noise.glitch_noise import GlitchInjector, glitch_snr
-from sage.data.noise.scattered_light import scattered_light_arch
 
 CLASSES = ["Blip", "Fast_Scattering", "Koi_Fish", "Low_Frequency_Burst", "Scattered_Light",
            "Tomte", "Whistle"]
@@ -126,11 +125,13 @@ def _peak1(h):
 
 @pytest.mark.parametrize("kind", sorted(ANALYTIC_GLITCHES))
 def test_shapes_peak_and_reproducible(kind):
-    a = analytic_glitch(kind, 5, 2048.0, duration=2.0, generator=torch.Generator().manual_seed(3))
-    b = analytic_glitch(kind, 5, 2048.0, duration=2.0, generator=torch.Generator().manual_seed(3))
+    kw = dict(timeperiod=1.5) if kind == "scattered_light_arch" else {}   # arches fit in 2 s
+    a = analytic_glitch(kind, 5, 2048.0, duration=2.0, generator=torch.Generator().manual_seed(3), **kw)
+    b = analytic_glitch(kind, 5, 2048.0, duration=2.0, generator=torch.Generator().manual_seed(3), **kw)
     assert a.shape == (5, 4096) and a.dtype == torch.float32
     torch.testing.assert_close(a, b)
-    torch.testing.assert_close(a.abs().amax(-1), torch.ones(5))
+    if kind != "scattered_light_arch":                                    # unit amplitude, not peak 1
+        torch.testing.assert_close(a.abs().amax(-1), torch.ones(5))
 
 
 def test_sine_gaussian_formula():
@@ -413,3 +414,40 @@ def test_population_log_uniform_weights_and_probability():
     assert empty == pytest.approx(200, abs=40)
     with pytest.raises(ValueError):
         GlitchPopulation(dict(cfg, segment_probability=1.5))
+
+
+# -- gengli blips --------------------------------------------------------------------------
+
+def test_gengli_glitch_matches_get_glitch_and_is_reproducible():
+    gengli = pytest.importorskip("gengli")
+    from sage.data.noise import gengli_glitch
+    fs = 4096.0
+    state = torch.get_rng_state()
+    h, p = gengli_glitch(3, fs, duration=1.0, t0=(0.4, 0.6), generator=torch.Generator().manual_seed(5),
+                         dtype=torch.float64, return_params=True)
+    torch.testing.assert_close(torch.get_rng_state(), state)          # caller's global RNG untouched
+    again = gengli_glitch(3, fs, duration=1.0, t0=(0.4, 0.6), generator=torch.Generator().manual_seed(5),
+                          dtype=torch.float64)
+    torch.testing.assert_close(h, again)
+    assert h.shape == (3, 4096)
+    torch.testing.assert_close(h.abs().amax(-1), torch.ones(3, dtype=torch.float64))
+    # gengli's blips, peak-normalised and centred at t0
+    g = torch.Generator().manual_seed(5)
+    _uniform_t0 = 0.4 + 0.2 * torch.rand(3, generator=g, dtype=torch.float64)
+    seed = int(torch.randint(2 ** 31 - 1, (1,), generator=g))
+    ref = gengli.glitch_generator("L1").get_glitch(3, srate=fs, seed=seed)
+    ref = ref / np.abs(ref).max(axis=-1, keepdims=True)
+    L = ref.shape[-1]
+    for i in range(3):
+        start = int(round(float(p["t0"][i]) * fs)) - L // 2
+        np.testing.assert_allclose(h[i, start:start + L].numpy(), ref[i], atol=1e-12)
+    torch.testing.assert_close(p["t0"], _uniform_t0)
+
+
+def test_population_gengli_class():
+    pytest.importorskip("gengli")
+    pop = GlitchPopulation({"sample_rate": 4096.0, "classes": {
+        "GengliBlip": {"generator": "gengli_glitch", "detector": "H1", "rate": 1.0, "duration": 0.5}}})
+    glitch, params = pop.sample("GengliBlip", 2, torch.Generator().manual_seed(0))
+    assert glitch.shape == (2, 2048)
+    torch.testing.assert_close(params["t0"], torch.full((2,), 0.25, dtype=torch.float64))

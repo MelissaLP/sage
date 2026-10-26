@@ -27,14 +27,14 @@ All of them give whitened glitch shapes for `GlitchInjector` (`glitch_noise.py`)
 
 | Source | SAGE code | Origin |
 |---|---|---|
-| gengli (blips) | `glitch_noise.py` (port of `add_glitch`) | [gengli](https://git.ligo.org/melissa.lopez/gengli) |
+| gengli (GAN blips; needs `pip install gengli`) | `gengli_glitches.py` (`gengli_glitch`); `glitch_noise.py` ports its `add_glitch` | [gengli](https://git.ligo.org/melissa.lopez/gengli), GPL-3.0, Lopez et al., [PRD 106 023027 (2022)](https://doi.org/10.1103/PhysRevD.106.023027) |
 | Real O3 glitches, 7 Gravity Spy classes, 2 s at 4096 Hz | `glitch_bank.py` (`DeepExtractorGlitchBank`; needs `huggingface_hub`) | [DeepExtractor reconstructions](https://huggingface.co/datasets/tomdooney/deepextractor-glitch-reconstructions), CC BY 4.0, Dooney et al., PRD (2026) |
 | Analytic: sine-Gaussian, ringdown, white noise burst, Gaussian blip | `analytic_glitches.py` | [McGANn](https://github.com/jmcginn/McGANn) `cGAN/GAN_training_data.py`, MIT, McGinn et al., [CQG 38 155005 (2021)](https://doi.org/10.1088/1361-6382/ac09cc) |
-| Scattered-light arches | `scattered_light.py` (`scattered_light_arch`) | [ArchEnemy](https://github.com/ArthurTolley/ArchEnemy) model, Tolley et al., [arXiv:2301.10491](https://arxiv.org/abs/2301.10491) |
-| Antiglitch (Blip, Tomte, Blip_Low_Frequency, Koi_Fish: log-normal bump in frequency), ported from the Antiglitch repository | `antiglitch.py` (`antiglitch_glitch`) | [Antiglitch](https://github.com/andrew-lundgren/antiglitch) `antiglitch/model.py`, MIT, [arXiv:2309.06594](https://arxiv.org/abs/2309.06594) |
+| Scattered-light arches | `analytic_glitches.py` (`scattered_light_arch`) | [ArchEnemy](https://github.com/ArthurTolley/ArchEnemy) model, Tolley et al., [arXiv:2301.10491](https://arxiv.org/abs/2301.10491) |
+| Antiglitch (Blip, Tomte, Blip_Low_Frequency, Koi_Fish: log-normal bump in frequency), ported from the Antiglitch repository | `analytic_glitches.py` (`antiglitch_glitch`) | [Antiglitch](https://github.com/andrew-lundgren/antiglitch) `antiglitch/model.py`, MIT, [arXiv:2309.06594](https://arxiv.org/abs/2309.06594) |
 
-The differences from each original are listed in the module docstrings.
+All analytic shapes (the McGAN, scattered-light and Antiglitch rows) are in `analytic_glitches.py`, with one interface; the differences from each original are listed in its docstring and in `gengli_glitches.py`'s.
 
 Rates and populations: `GlitchPopulation` (`glitch_population.py`) reads GWForge-style configs; `eucaif/sage_analytic_glitches.yaml` has O3a Gravity Spy rates computed with GWForge's method (`eucaif/gravityspy_o3a_rates.py`).
 
-Licence to discuss: ArchEnemy is GPL-3.0 (SAGE is MIT); `scattered_light.py` is written from the paper's equation and copies no ArchEnemy code.
+Licence to discuss: ArchEnemy is GPL-3.0 (SAGE is MIT); `scattered_light_arch` is written from the paper's equation and copies no ArchEnemy code.
