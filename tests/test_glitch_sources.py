@@ -271,9 +271,20 @@ def test_population_antiglitch_class():
 
 from pathlib import Path
 
+import yaml
+
 from sage.data.noise.glitch_population import GlitchPopulation, power_law_snr
 
-CONFIG = Path(__file__).resolve().parents[1] / "eucaif" / "sage_analytic_glitches.yaml"
+CONFIG = Path(__file__).resolve().parent / "data" / "glitch_population.yaml"
+
+
+def _dense_config(glitches_per_segment=(5, 30), **weights):
+    """The test config in dense mode; classes named in ``weights`` get that weight, the others 1."""
+    cfg = yaml.safe_load(CONFIG.read_text())
+    cfg["glitches_per_segment"] = list(glitches_per_segment)
+    for name, c in cfg["classes"].items():
+        c["weight"] = weights.get(name, 1.0)
+    return cfg
 
 
 def test_power_law_snr():
@@ -290,12 +301,13 @@ def test_power_law_snr():
 
 def test_population_config_classes():
     pop = GlitchPopulation(CONFIG)
-    assert pop.detectors == ["H1", "L1"] and pop.sample_rate == 4096.0
-    assert pop.rate("Blip", "H1") == 1.299 and pop.rate("Tomte", "L1") == 6.276 and pop.rate("Ringdown", "H1") == 0.0
+    assert pop.detectors == ["H1", "L1"] and pop.sample_rate == 2048.0
+    assert pop.rate("Blip", "H1") == 1.0 and pop.rate("SineGaussian", "L1") == 4.0 and pop.rate("Ringdown", "H1") == 0.0
+    assert {c["generator"] for c in pop.classes.values()} == set(ANALYTIC_GLITCHES)    # every analytic shape
     g = torch.Generator().manual_seed(1)
     for name, c in pop.classes.items():
         glitch, params = pop.sample(name, 3, g, dtype=torch.float64)
-        assert glitch.shape == (3, int(round(c["duration"] * 4096))) and torch.isfinite(glitch).all()
+        assert glitch.shape == (3, int(round(c["duration"] * 2048))) and torch.isfinite(glitch).all()
         low, high = c["snr_range"]
         assert ((params["snr"] >= low) & (params["snr"] <= high)).all()
     # Blip phase 0 or pi in GWForge's cosine convention: symmetric about the centre
@@ -342,7 +354,7 @@ def test_population_rejects_bad_configs():
 
 
 def test_population_dense_mode():
-    pop = GlitchPopulation(CONFIG.with_name("sage_analytic_glitches_dense.yaml"))
+    pop = GlitchPopulation(_dense_config(ScatteredLight=0.5))
     assert pop.per_segment == (5, 30)
     g = torch.Generator().manual_seed(4)
     counts, classes = [], collections.Counter()
@@ -352,9 +364,9 @@ def test_population_dense_mode():
         classes.update(e["cls"] for e in ev)
         assert all(0.0 <= e["time"] <= 8.0 and 5.0 <= e["snr"] <= 100.0 for e in ev)
     assert min(counts) >= 5 and max(counts) <= 30 and np.mean(counts) == pytest.approx(17.5, rel=0.1)
-    # weights: ScatteredLight 0.5, the six others 1
+    # weights: ScatteredLight 0.5, the five others 1
     frac = classes["ScatteredLight"] / sum(classes.values())
-    assert frac == pytest.approx(0.5 / 6.5, rel=0.25)
+    assert frac == pytest.approx(0.5 / 5.5, rel=0.25)
     cfg = dict(detectors=["H1"], sample_rate=2048.0, glitches_per_segment=[3, 3], classes=dict(
         A=dict(generator="gaussian_blip", weight=0.0), B=dict(generator="ringdown", weight=2.0)))
     ev = GlitchPopulation(cfg).draw(4.0, "H1", g)
@@ -376,15 +388,15 @@ def test_population_window():
 def test_population_apply_equals_add_glitch():
     """The vectorised injection is add_glitch applied glitch by glitch."""
     from sage.data.noise.glitch_noise import add_glitch
-    pop = GlitchPopulation(CONFIG.with_name("sage_analytic_glitches_dense.yaml"))
+    pop = GlitchPopulation(_dense_config())
     fs = pop.sample_rate
     n = int(6 * fs)
     g = torch.Generator().manual_seed(7)
-    strain = torch.randn(4, 1, n, generator=g, dtype=torch.float64)
-    asd = torch.rand(1, 1000, generator=g, dtype=torch.float64) + 0.5
+    strain = torch.randn(2, 2, n, generator=g, dtype=torch.float64)          # (batch, H1/L1, time)
+    asd = torch.rand(2, 1000, generator=g, dtype=torch.float64) + 0.5
     out, events = pop.inject(strain, asd, g, f_low=10.0, f_high=900.0, window=(1.0, 5.0))
     ref = strain.reshape(-1, n).clone()
-    asd_s = asd.expand(4, 1, 1000).reshape(-1, 1000)
+    asd_s = asd.expand(2, 2, 1000).reshape(-1, 1000)
     for s, evs in enumerate(events):
         for e in evs:
             ref[s:s + 1] = add_glitch(ref[s:s + 1], e["glitch"][None], asd_s[s], e["snr"], fs, t_inj=e["time"],
@@ -402,13 +414,13 @@ def test_population_log_uniform_weights_and_probability():
     assert float(params["f0"].min()) >= 12.0 and float(params["f0"].max()) <= 260.0
     assert float(logf.mean()) == pytest.approx(0.5 * (math.log(12) + math.log(260)), rel=0.01)
     assert float(torch.log(params["gbw"]).mean()) == pytest.approx(0.5 * (math.log(0.29) + math.log(4.2)), abs=0.02)
-    # dense mode: class mix from the per-detector rates; McGAN classes (rate 0) never drawn
-    cfg = dict(__import__("yaml").safe_load(CONFIG.read_text()), glitches_per_segment=[50, 50])
+    # dense mode without weights: class mix from the per-detector rates; rate-0 classes never drawn
+    cfg = dict(yaml.safe_load(CONFIG.read_text()), glitches_per_segment=[50, 50])
     dense = GlitchPopulation(cfg)
-    torch.testing.assert_close(dense.weights("L1")[1], torch.tensor(6.276, dtype=torch.float64))
+    torch.testing.assert_close(dense.weights("L1"), torch.tensor([2.0, 1.0, 4.0, 0.0, 0.0, 0.0], dtype=torch.float64))
     cls = collections.Counter(e["cls"] for _ in range(40) for e in dense.draw(4.0, "L1", g))
     assert cls["Ringdown"] == cls["WhiteNoiseBurst"] == cls["GaussianBlip"] == 0
-    assert cls["Tomte"] / sum(cls.values()) == pytest.approx(6.276 / (0.655 + 6.276 + 2.504 + 1.898 + 1.434), rel=0.1)
+    assert cls["SineGaussian"] / sum(cls.values()) == pytest.approx(4.0 / 7.0, rel=0.1)
     half = GlitchPopulation(dict(cfg, segment_probability=0.5))
     empty = sum(len(half.draw(4.0, "L1", g)) == 0 for _ in range(400))
     assert empty == pytest.approx(200, abs=40)

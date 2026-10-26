@@ -1,0 +1,61 @@
+# Small GlitchPopulation config for the tests: one class per analytic generator.
+# Format: see sage/data/noise/glitch_population.py. Rates are glitches per hour per detector;
+# ranges are [low, high]; phases are in GWForge's cosine convention. Dense mode
+# (glitches_per_segment) is switched on by the tests themselves.
+
+detectors: [H1, L1]
+sample_rate: 2048.0
+
+classes:
+
+  Blip:                                   # Antiglitch, symmetric: phase 0 or pi
+    generator: antiglitch_glitch
+    rate: {H1: 1.0, L1: 2.0}
+    f0: [12.0, 260.0]
+    gbw: [0.29, 4.2]
+    log_uniform: [f0, gbw]
+    phases: [0.0, 3.141592653589793]
+    snr_range: [5.0, 100.0]
+    snr_index: 2.3
+    duration: 0.5
+
+  ScatteredLight:
+    generator: scattered_light_arch
+    rate: {H1: 3.0, L1: 1.0}
+    fringe_frequency: [20.0, 40.0]
+    timeperiod: [1.8, 3.0]
+    snr_range: [5.0, 100.0]
+    snr_index: 2.4
+    duration: 3.2
+
+  SineGaussian:
+    generator: sine_gaussian
+    rate: {H1: 0.0, L1: 4.0}
+    f0: [70.0, 250.0]
+    q: [3.0, 20.0]
+    snr_range: [5.0, 100.0]
+    snr_index: 2.2
+    duration: 1.0
+
+  Ringdown:                               # rate 0: only drawn in dense mode with a weight
+    generator: ringdown
+    rate: 0.0
+    f0: [70.0, 250.0]
+    q: [9.0, 20.0]
+    snr_range: [5.0, 100.0]
+    duration: 1.0
+
+  WhiteNoiseBurst:
+    generator: white_noise_burst
+    rate: 0.0
+    tau: [1.0e-4, 1.0e-2]
+    band: [70.0, 250.0]
+    snr_range: [5.0, 100.0]
+    duration: 1.0
+
+  GaussianBlip:
+    generator: gaussian_blip
+    rate: 0.0
+    tau: [0.01, 0.05]
+    snr_range: [5.0, 100.0]
+    duration: 1.0
