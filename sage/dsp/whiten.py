@@ -201,9 +201,8 @@ class FIRWhitening(torch.nn.Module):
 
     This reproduces gwpy's *current* ``TimeSeries.whiten()`` — FIR filter
     design via ``gwpy.signal.filter_design.fir_from_transfer`` followed by
-    ``TimeSeries.convolve`` — which is a structurally different algorithm
-    from the legacy Welch/overlap-add whitener that ``SelfASDWhitening``
-    reproduces. The two share a name in gwpy's history but not a method.
+    ``TimeSeries.convolve`` — not gwpy's older Welch/overlap-add whitener,
+    which shares the name but not the method.
 
     Pipeline (per sample), mirroring gwpy's
     ``whiten`` / ``fir_from_transfer`` / ``truncate_transfer`` /
@@ -234,7 +233,7 @@ class FIRWhitening(torch.nn.Module):
        kernel (``_fir_from_transfer``) — one filter per detector (and
        per batch element, if the supplied ASD varies per sample).
     6. Detrend the *whole* input once (single global mean removal, not
-       per-frame — unlike ``SelfASDWhitening``), taper its first/last
+       per-frame), taper its first/last
        ``ntaps // 2`` samples with the same length-``ntaps`` window, and
        convolve with the FIR kernel. The convolution is done in the
        frequency domain as a length-``T`` *circular* convolution
@@ -262,11 +261,10 @@ class FIRWhitening(torch.nn.Module):
     window : str, optional, default: "hann"
         Window name, built with the *periodic* (``fftbins=True``)
         convention that ``scipy.signal.get_window`` (and hence gwpy)
-        uses by default — note this differs from the symmetric
-        convention ``SelfASDWhitening`` uses.
+        uses by default (not the symmetric convention).
     detrend : {"constant", None}, optional, default: "constant"
         Detrending applied once to the *whole* input before convolving
-        (not per-frame, unlike ``SelfASDWhitening``). Only mean removal
+        (not per-frame). Only mean removal
         is supported.
     fduration : float, optional, default: 2.0
         Duration in seconds of the FIR whitening filter.
@@ -274,9 +272,10 @@ class FIRWhitening(torch.nn.Module):
     highpass : float, optional
         Highpass corner frequency in Hz. ``None`` disables highpassing.
     eps : float, optional
-        Validity threshold for inverting the ASD — see
-        ``SelfASDWhitening``'s ``eps`` docstring for the identical
-        rationale (excise, don't amplify, invalid/out-of-band bins).
+        Validity threshold for inverting the ASD: bins with
+        ``ASD <= eps`` are excised (set to 0 in ``1 / ASD``) rather than
+        amplified, e.g. zero or out-of-band bins. Default: the dtype's
+        smallest normal number (see ``_invert_asd``).
     asd : torch.Tensor, optional
         If given (along with ``seq_len``), precomputes and caches the
         FIR filter at construction time via ``set_asd`` — useful when
@@ -571,9 +570,7 @@ class FIRWhitening(torch.nn.Module):
         Linearly resample an ASD onto a different uniform frequency grid
         spanning the same ``[0, Nyquist]`` range (i.e. same sample rate).
 
-        Identical to ``SelfASDWhitening.resample_asd``, duplicated here so
-        ``FIRWhitening`` has no cross-class dependency. Called
-        automatically by ``forward`` whenever the supplied ASD isn't
+        Called automatically by ``forward`` whenever the supplied ASD isn't
         already on the ``T // 2 + 1``-bin grid it needs.
 
         Parameters

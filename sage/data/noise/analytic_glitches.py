@@ -108,8 +108,7 @@ Documentation:
     gravitational wave data", arXiv:2301.10491 (2023); reference code at
     https://github.com/ArthurTolley/ArchEnemy, ``archenemy/search/artefact_template.py``.
 
-    LICENCE NOTE (to discuss with the SAGE maintainers): ArchEnemy is GPL-3.0 and SAGE is MIT.
-    This section is written from the paper's equation below and copies no ArchEnemy code.
+    Written from the paper's equation below; it copies no ArchEnemy code (GPL-3.0).
 
     One arch of fringe frequency f_f and time period T, for t in [-T/2, T/2):
 

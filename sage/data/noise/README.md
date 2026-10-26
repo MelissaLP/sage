@@ -36,5 +36,3 @@ All of them give whitened glitch shapes for `GlitchInjector` (`glitch_noise.py`)
 All analytic shapes (the McGAN, scattered-light and Antiglitch rows) are in `analytic_glitches.py`, with one interface; the differences from each original are listed in its docstring and in `gengli_glitches.py`'s.
 
 Rates and populations: `GlitchPopulation` (`glitch_population.py`) reads GWForge-style configs; `eucaif/sage_analytic_glitches.yaml` has O3a Gravity Spy rates computed with GWForge's method (`eucaif/gravityspy_o3a_rates.py`).
-
-Licence to discuss: ArchEnemy is GPL-3.0 (SAGE is MIT); `scattered_light_arch` is written from the paper's equation and copies no ArchEnemy code.
