@@ -9,7 +9,7 @@ Created on 2026-01-19 23:28:02
 
 __author__        = Narenraju Nagarajan
 __copyright__     = Copyright 2026, ProjectName
-__license__       = MIT Licence
+__license__       = GPL-3.0-or-later
 __version__       = 0.0.1
 __maintainer__    = Narenraju Nagarajan
 __affiliation__   = N/A
@@ -28,6 +28,7 @@ from .real_noise import (
     MemmapSingleNoiseSampler,
     MemmapNoiseSampler,
 )
+from .testing_noise import TestNoiseSampler
 
 from .white_noise import (
     sample_synthetic_noise,
@@ -50,6 +51,7 @@ from .antiglitch import antiglitch_glitch
 from .scattered_light import scattered_light_arch
 from .glitch_population import GlitchPopulation, power_law_snr
 from .lowfar_noise import StartTimeDataset
+from .split import split_observing_run, train_val_split
 
 # NOTE: the hard-negative miner lives in ``sage.data.noise.cma_mae_mining`` and
 # is imported directly by the hard-mining trainer (it pulls in pyribs).  It is
@@ -60,6 +62,7 @@ __all__ = [
     "HDF5SingleNoiseSampler",
     "MemmapSingleNoiseSampler",
     "MemmapNoiseSampler",
+    "TestNoiseSampler",
     "sample_synthetic_noise",
     "available_asds",
     "WhiteGaussianNoiseSampler",
@@ -83,4 +86,6 @@ __all__ = [
     "GlitchPopulation",
     "power_law_snr",
     "StartTimeDataset",
+    "split_observing_run",
+    "train_val_split",
 ]
