@@ -64,25 +64,32 @@ from sage.dsp.qtransform import QTransform
 
 warnings.filterwarnings("ignore")
 
+MISSING = {}                       # library -> why it could not be imported (printed at start)
 try:
     from ml4gw.transforms import QScan, SingleQTransform as Ml4gwSingleQ
-except Exception:  # ml4gw needs Python >= 3.11
+except Exception as ex:  # ml4gw needs Python >= 3.11
     QScan = Ml4gwSingleQ = None
+    MISSING["ml4gw"] = f"{type(ex).__name__}: {ex}"
 try:
     # qtam 0.3.1 imports its bundled torch_spline_interpolation_1_0_0 as a top-level module
     # (and the "full" extra that would provide it is not on PyPI), so put the package's own
     # folder on the path first
     import importlib.util
     import sys
-    sys.path.insert(0, os.path.dirname(importlib.util.find_spec("qtam").origin))
+    spec = importlib.util.find_spec("qtam")
+    if spec is None:
+        raise ImportError("qtam is not installed")
+    sys.path.insert(0, os.path.dirname(spec.origin))
     from qtam import QScanMulti, SingleQTransform as QtamSingleQ
-except Exception:
+except Exception as ex:
     QScanMulti = QtamSingleQ = None
+    MISSING["qtam"] = f"{type(ex).__name__}: {ex}"
 try:
     from gwpy.signal.qtransform import QPlane, q_scan
     from gwpy.timeseries import TimeSeries
-except Exception:
+except Exception as ex:
     TimeSeries = None
+    MISSING["gwpy"] = f"{type(ex).__name__}: {ex}"
 
 TASKS = ["scan", "singleq", "tiles", "roundtrip", "bestq"]
 CHECK_LABEL = {"scan": "max |image - gwpy| / peak", "singleq": "max |image - gwpy| / peak",
@@ -503,8 +510,11 @@ def main():
 
     print(f"{n} samples ({dur:g} s @ {fs:g} Hz) | image {cfg['nf']} x {cfg['nt']} | Q {cfg['qrange']}, "
           f"fixed Q {args.q:g} | f {cfg['frange']} Hz | devices {devices}")
-    print(f"torch {torch.__version__} | {machine()}" + ("" if QScan else " | ml4gw not installed")
-          + ("" if QScanMulti else " | qtam not installed") + ("" if TimeSeries else " | gwpy not installed"))
+    print(f"torch {torch.__version__} | {machine()}")
+    for lib, why in MISSING.items():
+        print(f"{lib} unavailable, skipped ({why[:150]})")
+    if "gwpy" in MISSING:
+        print("  -> no gwpy reference: no gwpy timings and no gwpy checks")
     if QtamSingleQ is not None and any(t in tasks for t in ("singleq", "tiles", "roundtrip")):
         print(f"QTAM at Q = {args.q:g}: {len(QtamSingleQ(dur, fs, q=args.q, frange=list(cfg['frange'])).freqs)} "
               "frequency rows (its own spacing)")
