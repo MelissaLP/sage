@@ -205,7 +205,10 @@ pip install --no-deps qtam                     # 0.3.1 tested
 
 - **On a CUDA machine, install torch for your CUDA version first**, following
   pytorch.org. Otherwise pip may pull a CPU-only or mismatched build. ml4gw also brings
-  `torchaudio`, which must match torch.
+  `torchaudio`, which must match torch. See "GPU clusters" below.
+- **Version limits.** torch >= 2.3 (older builds can't use numpy 2; >= 2.1 for SAGE, < 2.11 for
+  ml4gw), numpy < 2.4 and scipy < 1.17 (PyCBC). A later `pip install` of another package can
+  move numpy past 2.4: run `pip install "numpy<2.4" "scipy<1.17"` again if it does.
 - **`--no-deps` for QTAM.** Its dependencies (torch, numpy, scipy, matplotlib, pandas, gwpy,
   torchaudio) are already installed by SAGE and ml4gw. Its `full` extra asks for a
   `torch_spline_interpolation` that is not on PyPI.
@@ -236,6 +239,32 @@ top-level module, so `import qtam` fails with `ModuleNotFoundError: No module na
    The `.bak` files keep the originals. Reinstalling QTAM undoes the patch.
 
 QTAM is GPL-3.0. SAGE only imports it for these comparisons and does not depend on it.
+
+**GPU clusters with older GPUs or drivers** (e.g. Tesla P100 with a CUDA 11.8 driver). pip's
+default torch may not support the GPU or the driver, and old torch builds (2.2 and before) break
+with numpy 2 (`Failed to initialize NumPy: _ARRAY_API not found`). Check what the driver
+supports with `nvidia-smi` (top right, "CUDA Version"), then install a torch built for it, in
+the environment above:
+
+```bash
+# CUDA 11.8 driver: torch 2.7.1 is the last release with cu118 builds (2.6.0 if pip finds none)
+pip install "torch==2.7.1" "torchaudio==2.7.1" --index-url https://download.pytorch.org/whl/cu118
+# CUDA >= 12.6 driver: use .../whl/cu126 instead
+pip install "numpy<2.4" "scipy<1.17"
+pip check
+```
+
+**Check the environment** (CPU or GPU) before running anything:
+
+```bash
+python -c "import torch, numpy; print(torch.__version__, numpy.__version__, torch.cuda.is_available(), torch.cuda.get_arch_list()); print(torch.ones(3, device='cuda' if torch.cuda.is_available() else 'cpu').cpu().numpy())"
+python -c "from gwpy.signal.qtransform import QPlane, q_scan; from gwpy.timeseries import TimeSeries; print('gwpy ok')"
+```
+
+The first line should print no NumPy warning and end with `[1. 1. 1.]`; on a GPU, the
+architecture list should include the GPU's (`sm_60` for a P100). If the second line fails, the
+benchmark runs without gwpy (no gwpy bars and no gwpy checks); the benchmark also prints the
+reason at start (`gwpy unavailable, skipped (...)`).
 
 ## Reproduce, with figures
 

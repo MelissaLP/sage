@@ -6,8 +6,9 @@
 #   python -m pytest tests            # the 2 test_core_interpolation tests fail without a working C++ toolchain
 #
 # then patch QTAM's imports once (README_qtransform_benchmark.md, "The QTAM patch"; our scripts
-# work without it). On a CUDA machine, check that pip picked a torch build for your CUDA
-# (python -c "import torch; print(torch.cuda.is_available())").
+# work without it). On a CUDA machine, check that pip picked a torch build for your GPU and
+# driver; for older GPUs or drivers (e.g. P100, CUDA 11.8) see "GPU clusters" in
+# README_qtransform_benchmark.md.
 
 name: anomaly311
 channels:
