@@ -1,0 +1,24 @@
+# Conda environment for SAGE and the EuCAIF work: datasets, the Q-transform benchmark (with ml4gw
+# and QTAM), gengli blips and the tests. From the SAGE repo root:
+#
+#   conda env create -f eucaif/environment.yml
+#   conda activate anomaly311
+#   python -m pytest tests            # the 2 test_core_interpolation tests fail without a working C++ toolchain
+#
+# then patch QTAM's imports once (README_qtransform_benchmark.md, "The QTAM patch"; our scripts
+# work without it). On a CUDA machine, check that pip picked a torch build for your CUDA
+# (python -c "import torch; print(torch.cuda.is_available())").
+
+name: anomaly311
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11            # SAGE needs >= 3.10, ml4gw >= 3.11
+  - pip
+  - pip:
+      - torch>=2.1,<2.11   # ml4gw 0.8.5 needs torch < 2.11
+      - -e ..              # SAGE itself (pyproject.toml), relative to this file
+      - pytest
+      - ml4gw              # benchmark comparisons only
+      - qtam               # benchmark comparisons only
+      - gengli             # gengli blips (sage.data.noise.gengli_glitch)

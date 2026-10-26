@@ -1,6 +1,7 @@
 """
-Compare sage's FIRWhitening (torch) against gwpy 3.0.14 TimeSeries.whiten
-on synthetic H1/L1 noise coloured by aLIGOZeroDetHighPower.
+Compare sage's FIRWhitening (torch) against the installed gwpy's TimeSeries.whiten
+on synthetic H1/L1 noise coloured by aLIGOZeroDetHighPower (FIRWhitening's taper is
+picked to match: "planck" for gwpy 3, "hann" for gwpy >= 4).
 
 Changes vs. your original script are marked  # CHANGED  /  # NEW.
 """
@@ -9,6 +10,7 @@ import time
 import matplotlib.pyplot as plt   # NEW: was used below but never imported
 import numpy as np
 import pandas as pd
+import gwpy
 import torch
 from gwpy.frequencyseries import FrequencySeries
 from gwpy.timeseries import TimeSeries
@@ -83,6 +85,7 @@ def compare_whitening(
         sample_rate=sample_rate, window=window, fduration=fduration,
         eps=eps, highpass=highpass,
         dtype=dtype,                       # NEW: float32 (fast) or float64 (validation)
+        taper="planck" if int(gwpy.__version__.split(".")[0]) < 4 else "hann",
     )
     # CHANGED: seq_len must be an int (sample_length_in_s * sample_rate is a float),
     # and it must equal the real input length T.

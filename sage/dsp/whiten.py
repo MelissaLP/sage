@@ -199,7 +199,8 @@ class FIRWhitening(torch.nn.Module):
     """
     Whiten a time-domain strain via inverse spectrum truncation.
 
-    This reproduces gwpy's *current* ``TimeSeries.whiten()`` — FIR filter
+    This reproduces gwpy's ``TimeSeries.whiten()`` (gwpy >= 4 by default,
+    gwpy 3 with ``taper="planck"``) — FIR filter
     design via ``gwpy.signal.filter_design.fir_from_transfer`` followed by
     ``TimeSeries.convolve`` — not gwpy's older Welch/overlap-add whitener,
     which shares the name but not the method.
@@ -222,8 +223,12 @@ class FIRWhitening(torch.nn.Module):
     3. Smoothly zero/taper ``H`` (``_truncate_transfer``): hard-zero the
        first ``ncorner`` bins (``ncorner = int(highpass * T /
        sample_rate)`` if ``highpass`` is given, else 0), then taper the
-       remainder with a Planck window (``nleft=nright=5``, exactly
-       gwpy's ``truncate_transfer`` / ``gwpy.signal.window.planck``).
+       5 bins at each end of the remainder: with the two halves of a
+       10-point Hann window (``taper="hann"``, gwpy >= 4's
+       ``_truncate_transfer``), or with a Planck window
+       (``taper="planck"``, ``nleft=nright=5``, gwpy 3's
+       ``truncate_transfer`` / ``gwpy.signal.window.planck``). The two
+       give whitened data about 5e-4 (relative) apart.
     4. Inverse-FFT the tapered transfer into a length-``T`` impulse
        response, then keep only the outer ``ntaps // 2`` samples on each
        end (``_truncate_impulse``, using a fixed length-``ntaps`` window
@@ -294,6 +299,10 @@ class FIRWhitening(torch.nn.Module):
         it later with ``.to(dtype)`` / ``.double()`` / ``.float()`` is
         also supported: the cached filter is redesigned in the new
         precision on the next ``forward``.
+    taper : {"hann", "planck"}, optional, default: "hann"
+        Taper of the transfer function's ends (step 3): ``"hann"`` matches
+        gwpy >= 4, ``"planck"`` gwpy 3 (and the EuCAIF datasets released
+        before November 2026).
     **kwargs
         Forwarded to ``nn.Module.__init__``.
 
@@ -326,6 +335,7 @@ class FIRWhitening(torch.nn.Module):
         asd: torch.Tensor = None,
         seq_len: int = None,
         dtype: torch.dtype = torch.float32,
+        taper: str = "hann",
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -336,6 +346,9 @@ class FIRWhitening(torch.nn.Module):
             )
         if dtype not in (torch.float32, torch.float64):
             raise ValueError(f"dtype must be torch.float32 or torch.float64, got {dtype}.")
+        if taper not in ("hann", "planck"):
+            raise ValueError(f"taper must be 'hann' (gwpy >= 4) or 'planck' (gwpy 3), got {taper!r}.")
+        self.taper = taper
         self.detrend = detrend
         self.eps = eps
         self.sample_rate = sample_rate
@@ -510,11 +523,18 @@ class FIRWhitening(torch.nn.Module):
         out = transfer.clone()
         if ncorner:
             out[..., :ncorner] = 0
-        taper = self._planck_taper(
-            nsamp - ncorner, nleft=5, nright=5,
-            device=transfer.device, dtype=transfer.real.dtype,
-        )
-        out[..., ncorner:nsamp] = out[..., ncorner:nsamp] * taper
+        if self.taper == "planck":
+            taper = self._planck_taper(
+                nsamp - ncorner, nleft=5, nright=5,
+                device=transfer.device, dtype=transfer.real.dtype,
+            )
+            out[..., ncorner:nsamp] = out[..., ncorner:nsamp] * taper
+        elif nsamp > ncorner:
+            # scipy.signal.windows.tukey(10, alpha=1.0): a symmetric 10-point Hann window
+            k = torch.arange(10, device=transfer.device, dtype=transfer.real.dtype)
+            hann = 0.5 * (1 - torch.cos(2 * math.pi * k / 9))
+            out[..., ncorner:ncorner + 5] = out[..., ncorner:ncorner + 5] * hann[:5]
+            out[..., nsamp - 5:nsamp] = out[..., nsamp - 5:nsamp] * hann[5:]
         return out
 
     def _truncate_impulse(self, impulse: torch.Tensor) -> torch.Tensor:

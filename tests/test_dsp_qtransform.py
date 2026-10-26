@@ -100,7 +100,8 @@ def test_float32_and_leading_dims():
 
 
 def test_after_fir_whitening_matches_gwpy_whiten():
-    """FIRWhitening -> QTransform == gwpy's whiten (edges cropped) -> q_transform."""
+    """FIRWhitening -> QTransform == gwpy's whiten (edges cropped) -> q_transform, for the installed gwpy."""
+    import gwpy
     from gwpy.frequencyseries import FrequencySeries
     from sage.dsp.whiten import FIRWhitening
 
@@ -109,7 +110,8 @@ def test_after_fir_whitening_matches_gwpy_whiten():
     asd = 1e-23 * np.sqrt((20.0 / np.maximum(f, 5.0)) ** 8 + 1.0 + (np.maximum(f, 5.0) / 300.0) ** 2)
     rng = np.random.default_rng(3)
     colour = np.fft.irfft(np.fft.rfft(rng.normal(size=n)) * asd, n=n) * np.sqrt(fs / 2)
-    wh = FIRWhitening(fs, fduration=2.0, dtype=torch.float64)
+    taper = "planck" if int(gwpy.__version__.split(".")[0]) < 4 else "hann"
+    wh = FIRWhitening(fs, fduration=2.0, dtype=torch.float64, taper=taper)
     white = wh(torch.tensor(colour).reshape(1, 1, n), asd=torch.tensor(asd).reshape(1, -1))[0, 0]
 
     ref_white = gwpy_ts.TimeSeries(colour, sample_rate=fs).whiten(
@@ -117,6 +119,36 @@ def test_after_fir_whitening_matches_gwpy_whiten():
     qt = QTransform(fs, white.numel(), frange=(10, 900), dtype=torch.float64)
     ref = _gwpy(ref_white, frange=(10, 900))
     np.testing.assert_allclose(qt(white).numpy(), ref.value, atol=1e-6 * np.abs(ref.value).max())
+
+
+@pytest.mark.parametrize("taper", ["hann", "planck"])
+def test_fir_whitening_transfer_taper(taper):
+    """The transfer taper is gwpy 4's ``_truncate_transfer`` ("hann") or gwpy 3's ``truncate_transfer``
+    with its Planck window ("planck"), written out here so both are checked whatever gwpy is installed."""
+    import scipy.signal
+    from scipy.special import expit
+    from sage.dsp.whiten import FIRWhitening
+
+    transfer = np.random.default_rng(0).normal(size=200) + 1j * np.random.default_rng(1).normal(size=200)
+    for ncorner in (0, 7):
+        ref = transfer.copy()
+        ref[:ncorner] = 0
+        if taper == "hann":
+            w = scipy.signal.windows.tukey(10, alpha=1.0)
+            ref[ncorner:ncorner + 5] *= w[:5]
+            ref[-5:] *= w[-5:]
+        else:
+            w = np.ones(200 - ncorner)
+            w[0] = w[-1] = 0
+            k = np.arange(1, 5)
+            w[1:5] *= expit(-5 * (1.0 / k + 1.0 / (k - 5)))
+            w[-5:-1] *= expit(5 * (1.0 / (k - 5) + 1.0 / k))
+            ref[ncorner:] *= w
+        out = FIRWhitening(2048.0, taper=taper, dtype=torch.float64)._truncate_transfer(
+            torch.tensor(transfer), ncorner)
+        np.testing.assert_allclose(out.numpy(), ref, rtol=0, atol=1e-15)
+    with pytest.raises(ValueError):
+        FIRWhitening(2048.0, taper="tukey")
 
 
 def test_median_is_numpys():

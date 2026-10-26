@@ -433,7 +433,7 @@ class WhitenedExampleGenerator:
             "generated_window_in_s": self.window_s,
             "n_samples": self.L,
             "t_start": float(self.t[0]),
-            "whitening": "FIRWhitening (gwpy 3.0.14 TimeSeries.whiten equivalent)",
+            "whitening": "FIRWhitening (gwpy >= 4 TimeSeries.whiten equivalent)",
             "whitening_fduration": self.fduration,
             "whitening_highpass": float(self.highpass) if self.highpass is not None else -1.0,
             "whitening_window": "hann",

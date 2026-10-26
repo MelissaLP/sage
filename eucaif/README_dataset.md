@@ -23,7 +23,7 @@ The source population and window follow the ggwd / ML-challenge setup; see
 | Noise | Stationary Gaussian, coloured by `aLIGOZeroDetHighPower` (both detectors) |
 | Signal model | IMRPhenomPv2, non-spinning; `ConstantProjection` onto each detector |
 | Signal strength | Physical: set by the sampled luminosity distance; `chirp_distance` 65–175 Mpc, median network SNR ≈ 10 |
-| Whitening | 4 s FIR inverse-spectrum truncation, equivalent to gwpy 3.0.14 `TimeSeries.whiten` |
+| Whitening | 4 s FIR inverse-spectrum truncation, equivalent to gwpy's `TimeSeries.whiten` (gwpy >= 4; releases v1.0 and v2.0 used gwpy 3's, about 5e-4 apart) |
 | Merger time | `tc` uniform in [0.5, 1.5] s from the start of the 2 s window |
 
 ## How an example is made

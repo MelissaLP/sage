@@ -186,6 +186,10 @@ use their own. Made by `eucaif/example_glitch_transforms.py` (commands below).
 
 ## Installing the comparison libraries
 
+**The quick way:** `conda env create -f eucaif/environment.yml` (from the repo root) builds the
+whole environment, `anomaly311`: SAGE, ml4gw, QTAM, gengli and pytest. Then apply the QTAM patch
+below. The manual steps follow.
+
 SAGE's `pyproject.toml` covers SAGE itself, gwpy included. ml4gw and QTAM are needed only for
 the comparisons: `benchmark_qtransform.py`, `example_glitch_transforms.py`,
 `compare_glitch_extraction.py` and `residual_snr_by_class.py`. Each of these scripts skips a

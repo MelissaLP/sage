@@ -137,7 +137,7 @@ class GlitchDatasetGenerator:
             "generated_length_in_s": self.window_s,
             "frame_slice": np.array([int(round(self.qpad_s * self.fs)),
                                      int(round((self.qpad_s + self.frame_s) * self.fs))]),
-            "whitening": "FIRWhitening (gwpy 3.0.14 TimeSeries.whiten equivalent)",
+            "whitening": "FIRWhitening (gwpy >= 4 TimeSeries.whiten equivalent)",
             "whitening_fduration": self.fduration,
             "whitening_highpass": float(self.highpass) if self.highpass is not None else -1.0,
             "glitch_f_low": float(self.f_low) if self.f_low is not None else -1.0,
