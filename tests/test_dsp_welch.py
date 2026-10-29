@@ -80,6 +80,15 @@ class TestTorchWelchCall:
         with pytest.raises(ValueError):
             tw(_white(_n_for_segments(seg_len, seg_stride, 4)))
 
+    def test_return_freqs(self):
+        seg_len, seg_stride, fs = 128, 64, 512.0
+        tw = TorchWelch(1.0 / fs, seg_len, seg_stride)
+        x = _white(_n_for_segments(seg_len, seg_stride, 5))
+        freqs, psd = tw(x, return_freqs=True)
+        torch.testing.assert_close(psd, tw(x))
+        np.testing.assert_allclose(freqs.numpy(), np.fft.rfftfreq(seg_len, 1.0 / fs))  # scipy.signal.welch's grid
+        assert freqs.dtype == torch.float64 and freqs.shape == psd.shape
+
 
 # ── TorchWelch._median_bias ────────────────────────────────────────────────
 class TestMedianBias:

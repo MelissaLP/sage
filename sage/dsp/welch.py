@@ -162,15 +162,18 @@ class TorchWelch:
             self.window = window
 
     @torch.no_grad()
-    def __call__(self, timeseries: torch.Tensor) -> torch.Tensor:
+    def __call__(self, timeseries: torch.Tensor, return_freqs: bool = False):
         """
         Compute PSD for a single 1D timeseries.
 
         Args:
             timeseries: torch.Tensor of shape (N,), float32 or float64
+            return_freqs: also return the frequencies (Hz) of the PSD bins,
+                as ``ScipyWelch`` does
 
         Returns:
-            psd: torch.Tensor of shape (seg_len//2 + 1,)
+            psd: torch.Tensor of shape (seg_len//2 + 1,), or ``(freqs, psd)``
+            with ``return_freqs`` (``freqs`` float64, on the PSD's device)
         """
         if timeseries.ndim != 1:
             raise ValueError("Timeseries must be 1D")
@@ -234,6 +237,8 @@ class TorchWelch:
         else:
             raise ValueError(f"Unknown avg_method {self.avg_method}")
 
+        if return_freqs:
+            return self.freqs.to(psd.device), psd
         return psd
 
     @staticmethod
