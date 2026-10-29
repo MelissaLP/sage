@@ -151,6 +151,16 @@ def test_fir_whitening_transfer_taper(taper):
         FIRWhitening(2048.0, taper="tukey")
 
 
+def test_fir_whitening_window_is_float64_exact():
+    """The FIR window is scipy's periodic Hann to float64 precision (a float32-built window gives
+    ~1e-4 errors on real strain)."""
+    import scipy.signal
+    from sage.dsp.whiten import FIRWhitening
+
+    win = FIRWhitening(4096.0, fduration=2.0, dtype=torch.float64)._ntaps_window.numpy()
+    np.testing.assert_allclose(win, scipy.signal.get_window("hann", 8192), rtol=0, atol=1e-15)
+
+
 def test_median_is_numpys():
     x = torch.randn(3, 5, 8, dtype=torch.float64)
     np.testing.assert_allclose(_median(x).squeeze(-1).numpy(), np.median(x.numpy(), axis=-1))

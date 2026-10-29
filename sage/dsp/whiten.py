@@ -294,8 +294,11 @@ class FIRWhitening(torch.nn.Module):
         Precision of the whole module: filter design, cached filter and
         the whitening itself. Inputs (``x`` and ``asd``) are cast to it
         and the output is returned in it. float32 is ~1e-6 (relative)
-        from gwpy's float64 result and the fast choice on GPU; use
-        float64 for bit-level validation against gwpy (~1e-8). Changing
+        from gwpy's float64 result on simulated noise (ASD cut at low
+        frequency) and the fast choice on GPU. **Use float64 for real
+        detector strain**: its low-frequency noise is ~1e4 times the rest,
+        and float32 rounding of it, amplified by the filter, leaves errors
+        of ~1e-3 (float64: ~1e-11 from gwpy). Changing
         it later with ``.to(dtype)`` / ``.double()`` / ``.float()`` is
         also supported: the cached filter is redesigned in the new
         precision on the next ``forward``.
@@ -435,14 +438,16 @@ class FIRWhitening(torch.nn.Module):
     def _build_window(name: str, n: int) -> torch.Tensor:
         """Build a 1-D window with the PERIODIC convention (matches
         scipy.signal.get_window's default fftbins=True), not the
-        symmetric convention used elsewhere."""
+        symmetric convention used elsewhere. Built in float64: a float32
+        window (torch's default) shapes the FIR filter with ~1e-8 errors,
+        which add up to ~1e-4 of the whitened output on real detector data."""
         if name in (None, "boxcar", "rectangular"):
-            return torch.ones(n)
+            return torch.ones(n, dtype=torch.float64)
         try:
             window_fn = getattr(torch, f"{name}_window")
         except AttributeError as exc:
             raise ValueError(f"Unsupported window {name!r}.") from exc
-        return window_fn(n, periodic=True)
+        return window_fn(n, periodic=True, dtype=torch.float64)
 
     @property
     def dtype(self) -> torch.dtype:
