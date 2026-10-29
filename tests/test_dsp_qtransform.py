@@ -172,6 +172,29 @@ def test_default_fres_as_gwpy():
         QTransform(FS, T, logf=True, fres=0.5)
 
 
+def test_fir_whitening_shapes_numpy_and_output_dtype():
+    """(T,), (D, T) and numpy inputs give the (B, D, T) result in the input's shape; output_dtype
+    returns float32 from a float64 filter."""
+    from sage.dsp.whiten import FIRWhitening
+
+    fs, n = 2048.0, 8 * 2048
+    rng = np.random.default_rng(1)
+    x = rng.normal(size=(2, n))
+    f = np.linspace(0, fs / 2, 4097)
+    asd = np.sqrt(1.0 + (30.0 / np.maximum(f, 1.0)) ** 4)                # (F,) on a coarser grid
+    wh = FIRWhitening(fs, dtype=torch.float64)
+    ref = wh(torch.tensor(x).reshape(1, 2, n), torch.tensor(asd).reshape(1, -1))      # (1, 2, n - 2 pad)
+    out1 = wh(x[0], asd)                                                  # numpy (T,), (F,)
+    assert out1.shape == (n - 2 * wh.pad,) and out1.dtype == torch.float64
+    torch.testing.assert_close(out1, ref[0, 0])
+    torch.testing.assert_close(wh(torch.tensor(x), torch.tensor(asd)), ref[0])        # (D, T)
+    out32 = FIRWhitening(fs, dtype=torch.float64, output_dtype=torch.float32)(x[0], asd)
+    assert out32.dtype == torch.float32
+    torch.testing.assert_close(out32, ref[0, 0].float())
+    with pytest.raises(ValueError):
+        wh(torch.zeros(1, 1, 1, n, dtype=torch.float64), asd)
+
+
 def test_median_is_numpys():
     x = torch.randn(3, 5, 8, dtype=torch.float64)
     np.testing.assert_allclose(_median(x).squeeze(-1).numpy(), np.median(x.numpy(), axis=-1))

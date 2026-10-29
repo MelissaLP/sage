@@ -306,6 +306,11 @@ class FIRWhitening(torch.nn.Module):
         Taper of the transfer function's ends (step 3): ``"hann"`` matches
         gwpy >= 4, ``"planck"`` gwpy 3 (and the EuCAIF datasets released
         before November 2026).
+    output_dtype : {torch.float32, torch.float64}, optional
+        dtype of the whitened output; default: ``dtype``. For real strain,
+        ``dtype=torch.float64, output_dtype=torch.float32`` filters in
+        float64 and returns float32: the whitened data have unit variance,
+        so float32 loses nothing that matters (~1e-7).
     **kwargs
         Forwarded to ``nn.Module.__init__``.
 
@@ -320,8 +325,9 @@ class FIRWhitening(torch.nn.Module):
 
     Input / Output
     --------------
-    forward(x, asd=None) : (B, D, T), (D, F_in) or (B, D, F_in)
-        → (B, D, T - 2 * pad), in the module's ``dtype``
+    forward(x, asd=None) : (T,), (D, T) or (B, D, T); (F_in,), (D, F_in) or (B, D, F_in)
+        → the shape of ``x`` with ``T - 2 * pad`` samples, in ``output_dtype``
+        (torch tensors or numpy arrays in; a torch tensor out)
         ``asd`` is auto-resampled (linearly) onto ``F = T // 2 + 1`` bins
         if it isn't already on that grid. If omitted, uses the filter
         cached via ``set_asd``/the constructor's ``asd``/``seq_len``.
@@ -339,6 +345,7 @@ class FIRWhitening(torch.nn.Module):
         seq_len: int = None,
         dtype: torch.dtype = torch.float32,
         taper: str = "hann",
+        output_dtype: torch.dtype = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -351,7 +358,10 @@ class FIRWhitening(torch.nn.Module):
             raise ValueError(f"dtype must be torch.float32 or torch.float64, got {dtype}.")
         if taper not in ("hann", "planck"):
             raise ValueError(f"taper must be 'hann' (gwpy >= 4) or 'planck' (gwpy 3), got {taper!r}.")
+        if output_dtype not in (None, torch.float32, torch.float64):
+            raise ValueError(f"output_dtype must be None, torch.float32 or torch.float64, got {output_dtype}.")
         self.taper = taper
+        self.output_dtype = output_dtype
         self.detrend = detrend
         self.eps = eps
         self.sample_rate = sample_rate
@@ -404,7 +414,7 @@ class FIRWhitening(torch.nn.Module):
 
         Parameters
         ----------
-        asd : torch.Tensor, shape ``(D, F_in)`` or ``(B, D, F_in)``
+        asd : torch.Tensor or numpy array, shape ``(F_in,)``, ``(D, F_in)`` or ``(B, D, F_in)``
             One-sided ASD; auto-resampled onto the ``seq_len``-based
             grid if it isn't already there (see ``resample_asd``).
         seq_len : int
@@ -412,8 +422,8 @@ class FIRWhitening(torch.nn.Module):
             applied to. ``forward`` will raise if later called with a
             different ``T`` and no explicit ``asd=`` override.
         """
-        asd = asd.to(device=self._ntaps_window.device, dtype=self.dtype)
-        fir = self._design_fir(asd, seq_len)  # (D, ntaps) or (B, D, ntaps)
+        asd = torch.as_tensor(asd).to(device=self._ntaps_window.device, dtype=self.dtype)
+        fir = self._design_fir(asd, seq_len)  # (ntaps,), (D, ntaps) or (B, D, ntaps)
         self._cached_asd = asd
         self._cached_fir = fir
         self._cached_fir_fd = torch.view_as_real(torch.fft.rfft(fir, n=seq_len, dim=-1))
@@ -622,8 +632,8 @@ class FIRWhitening(torch.nn.Module):
 
         Parameters
         ----------
-        x : torch.Tensor, shape ``(B, D, T)``
-        asd : torch.Tensor, shape ``(D, F_in)`` or ``(B, D, F_in)``, optional
+        x : torch.Tensor or numpy array, shape ``(T,)``, ``(D, T)`` or ``(B, D, T)``
+        asd : torch.Tensor or numpy array, shape ``(F_in,)``, ``(D, F_in)`` or ``(B, D, F_in)``, optional
             One-sided ASD on any uniform ``[0, Nyquist]`` grid sharing
             this module's ``sample_rate``; auto-resampled if needed. If
             omitted, the filter cached via ``set_asd`` (or the
@@ -634,11 +644,19 @@ class FIRWhitening(torch.nn.Module):
 
         Returns
         -------
-        torch.Tensor, shape ``(B, D, T - 2 * pad)``
+        torch.Tensor, the shape of ``x`` with ``T - 2 * pad`` samples (the
+        first and last ``fduration / 2`` s are dropped), in ``output_dtype``
         """
         if self.dtype not in (torch.float32, torch.float64):
             raise TypeError(f"FIRWhitening supports float32/float64 only, module is {self.dtype}.")
-        x = x.to(dtype=self.dtype)
+        if not torch.is_tensor(x):
+            x = torch.as_tensor(x, device=self._ntaps_window.device)
+        if not 1 <= x.dim() <= 3:
+            raise ValueError(f"x must be (T,), (D, T) or (B, D, T), got shape {tuple(x.shape)}")
+        lead = x.shape[:-1]
+        x = x.to(dtype=self.dtype).reshape((1,) * (3 - x.dim()) + tuple(x.shape))   # (B, D, T)
+        if asd is not None and not torch.is_tensor(asd):
+            asd = torch.as_tensor(asd)
         B, D, T = x.shape
         if T <= 2 * self.pad:
             raise ValueError(
@@ -690,4 +708,5 @@ class FIRWhitening(torch.nn.Module):
         conv = torch.fft.irfft(torch.fft.rfft(x, dim=-1) * fir_fd, n=T, dim=-1)
 
         out = conv[..., self.ntaps - 1:T - 1] * math.sqrt(2.0 / self.sample_rate)
-        return out
+        out = out.reshape(*lead, out.shape[-1])
+        return out if self.output_dtype is None else out.to(self.output_dtype)
