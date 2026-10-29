@@ -161,6 +161,17 @@ def test_fir_whitening_window_is_float64_exact():
     np.testing.assert_allclose(win, scipy.signal.get_window("hann", 8192), rtol=0, atol=1e-15)
 
 
+def test_default_fres_as_gwpy():
+    """Without fres: 0.5 Hz steps, or 500 log-spaced frequencies with logf, as gwpy's q_transform."""
+    x = torch.randn(T, dtype=torch.float64)
+    for logf in (False, True):
+        qt = QTransform(FS, T, frange=(20, 500), logf=logf, dtype=torch.float64)
+        ref = _gwpy(x.numpy(), frange=(20, 500), logf=logf)
+        np.testing.assert_allclose(qt.frequencies.numpy(), ref.frequencies.value)
+    with pytest.raises(ValueError):
+        QTransform(FS, T, logf=True, fres=0.5)
+
+
 def test_median_is_numpys():
     x = torch.randn(3, 5, 8, dtype=torch.float64)
     np.testing.assert_allclose(_median(x).squeeze(-1).numpy(), np.median(x.numpy(), axis=-1))

@@ -212,9 +212,9 @@ class QTransform(torch.nn.Module):
         Maximum fractional mismatch between neighbouring tiles (gwpy default 0.2).
     tres : float, optional
         Time resolution of the output, in s. Default: ``(outseg[1] - outseg[0]) / 1000``.
-    fres : float or int
-        Frequency resolution in Hz (default 0.5), or the number of log-spaced frequencies if
-        ``logf``.
+    fres : float or int, optional
+        Frequency resolution in Hz, or the number of log-spaced frequencies if ``logf``.
+        Default, as gwpy: 0.5 Hz, or 500 frequencies with ``logf``.
     logf : bool
         Log-spaced output frequencies (gwpy default False).
     outseg : (float, float), optional
@@ -258,7 +258,7 @@ class QTransform(torch.nn.Module):
         frange=DEFAULT_FRANGE,
         mismatch: float = DEFAULT_MISMATCH,
         tres: float = None,
-        fres=0.5,
+        fres="<default>",
         logf: bool = False,
         outseg=None,
         norm="median",
@@ -271,6 +271,10 @@ class QTransform(torch.nn.Module):
             raise ValueError(f"dtype must be torch.float32 or torch.float64, got {dtype}.")
         if fres is None:
             raise NotImplementedError("fres=None is not supported (rows differ between Q-planes).")
+        if fres == "<default>":                                    # gwpy's QGram.interpolate defaults
+            fres = 500 if logf else 0.5
+        if logf and int(fres) < 2:
+            raise ValueError(f"with logf, fres is the number of frequencies (>= 2), got {fres}")
         norm = norm.lower() if isinstance(norm, str) else norm
         if norm not in (True, False, "median", "mean"):
             raise ValueError(f"Invalid normalisation {norm!r}")
