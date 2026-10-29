@@ -199,6 +199,8 @@ class FIRWhitening(torch.nn.Module):
     """
     Whiten a time-domain strain via inverse spectrum truncation.
 
+    NOTE: real strain must be whitened in float64 (the default); float32 leaves ~1e-3 errors.
+
     This reproduces gwpy's ``TimeSeries.whiten()`` (gwpy >= 4 by default,
     gwpy 3 with ``taper="planck"``) — FIR filter
     design via ``gwpy.signal.filter_design.fir_from_transfer`` followed by
@@ -290,15 +292,15 @@ class FIRWhitening(torch.nn.Module):
     seq_len : int, optional
         Required alongside ``asd`` — the fixed input length ``T`` the
         cached filter is designed for.
-    dtype : {torch.float32, torch.float64}, optional, default: torch.float32
+    dtype : {torch.float64, torch.float32}, optional, default: torch.float64
         Precision of the whole module: filter design, cached filter and
-        the whitening itself. Inputs (``x`` and ``asd``) are cast to it
-        and the output is returned in it. float32 is ~1e-6 (relative)
-        from gwpy's float64 result on simulated noise (ASD cut at low
-        frequency) and the fast choice on GPU. **Use float64 for real
-        detector strain**: its low-frequency noise is ~1e4 times the rest,
+        the whitening itself. Inputs (``x`` and ``asd``) are cast to it.
+        float64 is ~1e-11 (relative) from gwpy and is needed for real
+        detector strain: its low-frequency noise is ~1e4 times the rest,
         and float32 rounding of it, amplified by the filter, leaves errors
-        of ~1e-3 (float64: ~1e-11 from gwpy). Changing
+        of ~1e-3. float32 is fine for simulated noise (ASD cut at low
+        frequency, ~1e-6 from gwpy), faster on GPU, and the only choice on
+        Apple's MPS (no float64). Changing
         it later with ``.to(dtype)`` / ``.double()`` / ``.float()`` is
         also supported: the cached filter is redesigned in the new
         precision on the next ``forward``.
@@ -307,10 +309,10 @@ class FIRWhitening(torch.nn.Module):
         gwpy >= 4, ``"planck"`` gwpy 3 (and the EuCAIF datasets released
         before November 2026).
     output_dtype : {torch.float32, torch.float64}, optional
-        dtype of the whitened output; default: ``dtype``. For real strain,
-        ``dtype=torch.float64, output_dtype=torch.float32`` filters in
-        float64 and returns float32: the whitened data have unit variance,
-        so float32 loses nothing that matters (~1e-7).
+        dtype of the whitened output; default: ``dtype``. With the float64
+        default, ``output_dtype=torch.float32`` filters in float64 and
+        returns float32: the whitened data have unit variance, so float32
+        loses nothing that matters (~1e-7).
     **kwargs
         Forwarded to ``nn.Module.__init__``.
 
@@ -343,7 +345,7 @@ class FIRWhitening(torch.nn.Module):
         eps: float = None,
         asd: torch.Tensor = None,
         seq_len: int = None,
-        dtype: torch.dtype = torch.float32,
+        dtype: torch.dtype = torch.float64,
         taper: str = "hann",
         output_dtype: torch.dtype = None,
         **kwargs,
