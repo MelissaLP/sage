@@ -169,6 +169,13 @@ The published record should cite a **tagged release** of this repository
 keeps moving. Generate the final file from a clean checkout of that tag, so
 `sage_version` in the file is exactly the tag.
 
+**Releases.** Each regenerates from its tag; the same seed gives different files in the two:
+
+| Release | Changes |
+|---|---|
+| `eucaif-dataset-v1.0` | first release |
+| `eucaif-dataset-v1.1` | due to the merge of SAGE `main` into `eucaif`: BBH waveforms from `main`'s IMRPhenomPv2 (LAL's time correction, tc and taper conventions) and PyCBC's chirp-distance convention (every `distance` x 0.987, network `snr` x 1.013); whitening as gwpy >= 4. Same classes, `tc`, sky positions and masses; noise-only examples ~1e-3 apart. |
+
 ## Relation to the ggwd setup
 
 | | ggwd INI | This dataset |
