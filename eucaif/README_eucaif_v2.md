@@ -25,7 +25,7 @@ With `glitches.probability: 0` and `nonphysical_glitches.probability: 0` the exa
 
 ![EuCAIF v2 example](figures/eucaif_v2_example.png)
 
-A noise-only and a BBH example (network SNR 19.8), H1 and L1: Q-scans of the 2 s frame (top) and the
+A noise-only and a BBH example (network SNR 20.0), H1 and L1: Q-scans of the 2 s frame (top) and the
 whitened time series (bottom). Orange: O3a glitches, violet: the non-physical McGAN glitch, blue:
 the BBH (dashed: merger time); each glitch is labelled with its class and SNR. Note that the Q-scan
 picks its Q per detector (gwpy's behaviour), so H1 and L1 can differ. Made, with timings, by
