@@ -134,7 +134,7 @@ def make_generator(config, seed=0, device="cpu", dtype=torch.float32, batch_size
                        int(round((d["q_padding"] + d["frame_length"]) * gen.fs)))
     attrs = gen.attrs
     gen.attrs = lambda: {**attrs(), "eucaif_v2_config": cfg["_text"], "frame_slice": np.array(gen.frame_slice),
-                         "dataset_version": "eucaif v2.1"}
+                         "dataset_version": "eucaif v2.2"}
     return gen
 
 

@@ -6,8 +6,8 @@ with O3a rates**, for training on the fly. The network can take the **time serie
 (gwpy-exact) or SAGE's **invertible Q-transform tiles** as input. Everything is set in one file,
 `eucaif/eucaif_v2.yaml`.
 
-Run from the SAGE repo root with `PYTHONPATH=.`, in an environment with PyCBC (analytic ASDs) and
-h5py, as for v1.
+Run from the SAGE repo root with `PYTHONPATH=.`, with Python >= 3.10, PyCBC (analytic ASDs) and h5py:
+`conda env create -f eucaif/environment.yml` builds such an environment.
 
 ## What changes from v1
 
@@ -29,7 +29,7 @@ A noise-only and a BBH example (network SNR 19.8), H1 and L1: Q-scans of the 2 s
 whitened time series (bottom). Orange: O3a glitches, violet: the non-physical McGAN glitch, blue:
 the BBH (dashed: merger time); each glitch is labelled with its class and SNR. Note that the Q-scan
 picks its Q per detector (gwpy's behaviour), so H1 and L1 can differ. Made, with timings, by
-`python3 eucaif/example_eucaif_v2.py --timing` (~3.4 ms per example in batches on one CPU core).
+`python3 eucaif/example_eucaif_v2.py --timing`.
 
 ## The config (`eucaif/eucaif_v2.yaml`)
 
@@ -80,7 +80,8 @@ and recomputes everything; it reproduces GWForge's published Blip and Tomte numb
 
 The Antiglitch classes are ported from the [Antiglitch repository](https://github.com/andrew-lundgren/antiglitch)
 (A. Lundgren, MIT; [arXiv:2309.06594](https://arxiv.org/abs/2309.06594)): its glitch model, in torch, with
-the 5th-95th percentiles of its fits to O3 glitches as parameter ranges (`sage/data/noise/antiglitch.py`).
+the 5th-95th percentiles of its fits to O3 glitches as parameter ranges (`antiglitch_glitch` in
+`sage/data/noise/analytic_glitches.py`).
 The release `eucaif-dataset-v2.0` used GWForge's sine-Gaussians for Blip, Tomte and Blip_Low_Frequency,
 and had no Koi_Fish; `eucaif-dataset-v2.1` uses Antiglitch for all four.
 
@@ -115,7 +116,8 @@ for epoch in range(n_epochs):
   targets), `n_glitches` (B, 2), `snr` and `tc` (NaN for noise-only examples).
 - Batch *i* of epoch *e* is fully determined by `(seed, e, i)` (noise, glitches, BBH parameters and
   projection), whatever the number of workers.
-- Speed: ~380 examples/s per CPU process for generation; compute the Q-transforms on the GPU.
+- Speed: ~180 examples/s (5.7 ms each) per single-threaded CPU process for generation; compute the
+  Q-transforms on the GPU.
 - `qt.qscan` is gwpy's Q-scan (one Q per example and detector, median-normalised), computed on the
   stored window and output on the frame only. `qt.tiles` are invertible: `qt.inverse(tiles[q], q)`
   returns the time series (then `qt.frame`), so a network can work in the Q domain and be trained
@@ -145,7 +147,7 @@ n_glitches          (N, 2)        glitches per example and detector
 glitches/example    one row per glitch: example index, detector index, class index (attrs glitch_classes),
 glitches/...        time (s from the stored-window start), snr, and the generator parameters
 attrs               v1's, plus eucaif_v2_config (the full YAML), frame_slice, glitch_population,
-                    dataset_version = "eucaif v2.1" ("eucaif v2" in v2.0 files)
+                    dataset_version = "eucaif v2.2" ("eucaif v2.1" / "eucaif v2" in v2.1 / v2.0 files)
 ```
 
 About 0.13 MB per example in float32 (strain and glitches): 10,000 examples are ~1.3 GB.
@@ -153,9 +155,17 @@ About 0.13 MB per example in float32 (strain and glitches): 10,000 examples are 
 ## Reproducibility and version
 
 Data are determined by the code version, the config, the seed and the command, all stored in the
-file. Cite the tagged release **`eucaif-dataset-v2.1`** of https://github.com/MelissaLP/sage and
-generate published files from a clean checkout of it, so `sage_version` in the file is the tag.
-Files made with `eucaif-dataset-v2.0` (sine-Gaussian Blips, no Koi_Fish) regenerate from that tag.
+file. Cite a tagged release of https://github.com/MelissaLP/sage and generate published files from a
+clean checkout of it, so `sage_version` in the file is the tag. Each release regenerates from its tag:
+
+| Release | Changes |
+|---|---|
+| `eucaif-dataset-v2.0` | GWForge sine-Gaussians for Blip, Tomte, Blip_Low_Frequency; no Koi_Fish |
+| `eucaif-dataset-v2.1` | Antiglitch for Blip, Tomte, Blip_Low_Frequency and Koi_Fish |
+| v2.2 (current code; tag `eucaif-dataset-v2.2` still to be made) | SAGE `main` merged: BBH waveforms from its IMRPhenomPv2 (LAL's time correction, tc and taper conventions) and PyCBC's chirp-distance convention (distances ~1.3% lower, SNRs ~1.3% higher); whitening as gwpy >= 4 (5e-4 from v2.1's gwpy-3 whitening). Glitches and noise as v2.1 apart from the whitening change. Generation ~20% slower. |
+
+Same seeds therefore give different BBH examples in v2.1 and v2.2; noise-only examples differ only by
+the whitening change.
 
 ## Caveats
 
