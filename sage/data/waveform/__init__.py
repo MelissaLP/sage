@@ -28,6 +28,6 @@ from .approximants.IMRPhenomPv2 import IMRPhenomPv2
 from .approximants.IMRPhenomXAS_NRTidalv3 import IMRPhenomXAS_NRTidalv3
 from .approximants.IMRPhenomXP import IMRPhenomXP
 from .approximants.IMRPhenomXPHM import IMRPhenomXPHM
-from .project import ConstantProjection
+from .project import ConstantProjection, gmst_from_gps
 from .sampler import read_from_config
 from .distributions.snr_rescaling import HalfNorm

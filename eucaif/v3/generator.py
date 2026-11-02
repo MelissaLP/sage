@@ -15,7 +15,7 @@ Per example (all times from the GPS start of the context):
    sides only, averaged, as ggwd FM production does, so a loud glitch in the stored window does not bias it;
 3. half the examples get a BBH: SAGE's waveform (default ``IMRPhenomPv2``; SAGE also has IMRPhenomD, XAS, XHM, XP and
    XPHM) from the v1 prior with tc in the frame, projected with the sidereal time of the window's real GPS time
-   (``GPSProjection``), physical distances or rescaled to ``snr_range`` against this window's PSD;
+   (``ConstantProjection.set_gps``), physical distances or rescaled to ``snr_range`` against this window's PSD;
 4. glitches (``GlitchPopulation``, analytic shapes as strain, v2's populations) are injected in the stored window at
    their SNR against this window's PSD;
 5. the sum is whitened with the configured ``Whitener`` (with this window's ASD) and cropped to the stored window;
@@ -40,27 +40,6 @@ from sage.data.waveform import ConstantProjection, read_from_config
 from sage.dsp.welch import TorchWelch
 
 APPROXIMANTS = ("IMRPhenomPv2", "IMRPhenomD", "IMRPhenomXAS", "IMRPhenomXHM", "IMRPhenomXP", "IMRPhenomXPHM")
-
-
-def gmst(gps):
-    """Greenwich mean sidereal time (rad) of GPS times."""
-    import lal
-    return np.array([lal.GreenwichMeanSiderealTime(lal.LIGOTimeGPS(float(t))) % (2 * np.pi)
-                     for t in np.atleast_1d(gps)])
-
-
-class GPSProjection(ConstantProjection):
-    """``ConstantProjection`` with the sidereal time of given GPS times instead of a random one: on real data the
-    antenna response must be that of the data's time. Call ``set_gps`` before generating each batch."""
-
-    def set_gps(self, gps):
-        self._gmst = torch.tensor(gmst(gps), dtype=self.dtype, device=self.device)
-
-    def random_gmst_estimate(self, B=None):
-        if getattr(self, "_gmst", None) is None or self._gmst.numel() != B:
-            raise RuntimeError(f"GPSProjection: set_gps with {B} GPS times before generating")
-        out, self._gmst = self._gmst, None
-        return out
 
 
 def _waveform_class(name):
@@ -133,7 +112,7 @@ class EucaifV3:
         _register(v2, batch_size=batch_size, device=device)
         self._tmp = tempfile.TemporaryDirectory()
         self.param_sampler = read_from_config(_prior_with_tc(v2, self._tmp.name), seed=seed)
-        self.projection = GPSProjection()
+        self.projection = ConstantProjection()
         self.signal_sampler = _waveform_class(cfg["signal"].get("approximant", "IMRPhenomPv2"))(
             self.param_sampler, self.projection)
         self.cols = self.param_sampler.param_index

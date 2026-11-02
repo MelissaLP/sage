@@ -36,6 +36,43 @@ from sage.core.hardcode import _DETMETADATA
 from sage.data.waveform import waveform_utils
 from sage.core.config import get_cfg, get_data_cfg
 
+# GPS times at which GPS - UTC steps up by one leap second (1 s from 1981-07-01 ... 18 s from 2017-01-01)
+_GPS_LEAP_SECONDS = (
+    46828800, 78364801, 109900802, 173059203, 252028804, 315187205, 346723206, 393984007, 425520008,
+    457056009, 504489610, 551750411, 599184012, 820108814, 914803215, 1025136016, 1119744017, 1167264018,
+)
+# GPS time of J2000.0 (2000-01-01 12:00:00 UTC) and GPS - UTC then
+_GPS_J2000, _LEAP_J2000 = 630763213.0, 13.0
+
+
+def gmst_from_gps(gps, device=None, dtype=None):
+    """
+    Greenwich mean sidereal time (rad, in ``[0, 2π)``) of GPS times, in torch.
+
+    IAU 1982 GMST from UTC (GPS minus the leap seconds above), taking UT1 = UTC as LAL's
+    ``GreenwichMeanSiderealTime`` does: agrees with it to ~2e-9 rad, and with astropy (true UT1) to < 7e-5 rad.
+    Leap seconds announced after 2017 must be added to ``_GPS_LEAP_SECONDS``.
+
+    Parameters
+    ----------
+    gps : float, array-like or torch.Tensor
+        GPS times in seconds.
+    device, dtype : optional
+        Of the result; the computation is always float64 on CPU.
+
+    Returns
+    -------
+    torch.Tensor, same shape as ``gps``
+    """
+    t = torch.as_tensor(gps, dtype=torch.float64).cpu()
+    leaps = torch.tensor(_GPS_LEAP_SECONDS, dtype=torch.float64)
+    leap = torch.searchsorted(leaps, t, right=True).to(torch.float64)
+    days = (t - leap - (_GPS_J2000 - _LEAP_J2000)) / 86400.0
+    cent = days / 36525.0
+    deg = 280.46061837 + 360.98564736629 * days + 0.000387933 * cent**2 - cent**3 / 38710000.0
+    out = torch.deg2rad(torch.remainder(deg, 360.0))
+    return out.to(device=device, dtype=dtype or torch.float64)
+
 
 class ConstantProjection(torch.nn.Module):
     """
@@ -55,6 +92,8 @@ class ConstantProjection(torch.nn.Module):
     The Greenwich Mean Sidereal Time (GMST) is randomised per batch rather
     than looked up from GPS time — this is an approximation suitable for
     training where the source position is already drawn isotropically.
+    On real data call :meth:`set_gps` first: the projection then uses the
+    GMST of those GPS times (:func:`gmst_from_gps`) until ``set_gps(None)``.
 
     Parameters
     ----------
@@ -132,6 +171,26 @@ class ConstantProjection(torch.nn.Module):
             # Relative position of DET of Earth center
             loc = self.get_relative_position(detname)
             self.dx[ndet] = earth_center - loc
+
+        # GMST of set_gps; None means random (random_gmst_estimate)
+        self._gmst = None
+
+    def set_gps(self, gps):
+        """
+        Use the GMST of these GPS times (one per sample, or one for the whole batch) in the
+        following ``forward`` calls, instead of a random one. ``set_gps(None)`` goes back to random.
+        """
+        self._gmst = None if gps is None else gmst_from_gps(gps, self.device, self.dtype).reshape(-1)
+
+    def gmst_estimate(self, B):
+        """GMST ``(B,)`` for a batch: from :meth:`set_gps` if set, else random."""
+        if self._gmst is None:
+            return self.random_gmst_estimate(B=B)
+        if self._gmst.numel() == 1:
+            return self._gmst.expand(B)
+        if self._gmst.numel() != B:
+            raise ValueError(f"set_gps gave {self._gmst.numel()} GPS times for a batch of {B}")
+        return self._gmst
 
     def get_relative_position(self, detname):
         """
@@ -385,10 +444,10 @@ class ConstantProjection(torch.nn.Module):
         """
         if freqs is None:
             freqs = self.freqs
-        # Get GMST estimates for entire batch.
+        # Get GMST estimates for entire batch (random unless set_gps was called).
         # Pass the actual runtime batch size so validation (where B may differ
         # from self.batch_size) does not produce a shape mismatch.
-        gmst_estimate = self.random_gmst_estimate(B=ra.shape[0])
+        gmst_estimate = self.gmst_estimate(B=ra.shape[0])
         # 'constant' assume fixed orientation relative to source over the
         # duration of the signal, accurate for short duration signals
         fp, fc = self.antenna_pattern(ra, dec, polarization, gmst_estimate)

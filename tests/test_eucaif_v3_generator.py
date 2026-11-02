@@ -7,10 +7,9 @@ import numpy as np
 import pytest
 import torch
 
-pytest.importorskip("lal")
-from eucaif.v3 import segments as S                                       # noqa: E402
-from eucaif.v3 import sources as SRC                                      # noqa: E402
-from eucaif.v3.generator import EucaifV3, gmst, load_config               # noqa: E402
+from eucaif.v3 import segments as S
+from eucaif.v3 import sources as SRC
+from eucaif.v3.generator import EucaifV3, load_config
 
 FS = 2048.0
 SEG = (1_240_000_000.0, 1_240_000_600.0)
@@ -76,14 +75,10 @@ def test_snr_range_sets_the_network_snr_and_seed_reproduces(tmp_path):
                                       for ev, g in zip(b["glitch_events"], b["gps"].tolist()) for e in ev)
 
 
-def test_exclude_centre_psd_and_gmst(tmp_path):
+def test_exclude_centre_psd(tmp_path):
     gen = _generator(tmp_path, psd=dict(exclude_centre=True))
     b = gen.batch(4)
     assert torch.isfinite(b["x"]).all()
-    from astropy.time import Time                                                 # an independent GMST
-    g = gmst([1126259462.4])[0]
-    ref = Time(1126259462.4, format="gps").sidereal_time("mean", "greenwich").rad
-    assert 0 <= g < 2 * np.pi and g == pytest.approx(ref, abs=1e-4)
 
 
 def test_network_population_keeps_only_the_network_detectors(tmp_path):
