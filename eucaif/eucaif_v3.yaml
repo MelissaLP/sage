@@ -1,0 +1,26 @@
+# EuCAIF dataset v3: real detector noise (GWOSC open data, or frames on a LIGO/Virgo cluster) with BBH and
+# glitch injections, for training on the fly. Read by eucaif/v3; instructions in eucaif/v3/README.md.
+# Built in stages: this file holds the sections implemented so far.
+data:
+  detectors: [H1, L1]            # any of H1, L1, V1 (V1: O3 only)
+  runs: [O3a, O3b, O4a]          # GWOSC observing runs
+segments:
+  min_length: 32.0               # s of contiguous good time a window needs (PSD context + frame); shorter
+                                 # stretches are not used
+  veto:                          # every GWOSC event (all catalogues) removed over [t - before, t + after] s
+    before: 30.0
+    after: 10.0
+  file: v3/segments_HL.json      # written by `python -m eucaif.v3.segments eucaif/eucaif_v3.yaml --out ...`
+split:
+  mode: gps_blocks               # gps_blocks: disjoint GPS blocks per split; random: every split draws anywhere
+                                 # (as ggwd FM production; splits may share data). Windows keep their GPS time.
+  block_seconds: 4096            # gps_blocks only
+  fractions: {train: 0.8, validation: 0.1, test: 0.1}
+  seed: 0
+glitch_tags:                     # labelled real glitches, to tag (not remove) windows; empty: no tags
+  - path: gravityspy/H1_O3a.csv  # Gravity Spy, Zenodo 5649212 (H1/L1, O3a/O3b)
+    detector_column: ifo
+    gps_column: event_time
+    label_column: ml_label
+    confidence_column: ml_confidence
+    min_confidence: 0.9
