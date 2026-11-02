@@ -62,6 +62,18 @@ def test_qtransform_inputs():
     assert float((X - R)[..., band].abs().max() / X[..., band].abs().max()) < 1e-4
 
 
+def test_on_the_fly_model_inputs():
+    plain = next(iter(EucaifV2OnTheFly(CONFIG, batch_size=4, batches_per_epoch=1, seed=3, inputs=[])))
+    b = next(iter(EucaifV2OnTheFly(CONFIG, batch_size=4, batches_per_epoch=1, seed=3,
+                                   inputs=["timeseries", "qscan", "tiles"])))
+    assert "timeseries" not in plain and torch.equal(plain["x"], b["x"])          # inputs do not change the data
+    torch.testing.assert_close(b["timeseries"], b["x"][..., 2048:6144])
+    assert b["qscan"].shape == (4, 2, 256, 256) and set(b["tiles"]) == {5.7, 45.3}
+    assert "timeseries" in next(iter(EucaifV2OnTheFly(CONFIG, batch_size=4, batches_per_epoch=1)))  # the YAML's
+    with pytest.raises(ValueError, match="not in"):
+        EucaifV2OnTheFly(CONFIG, inputs=["spectrogram"])
+
+
 def test_written_file(tmp_path):
     from make_whitened_examples import write_dataset
     gen = make_generator(CONFIG, seed=2)

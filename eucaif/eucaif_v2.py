@@ -145,13 +145,16 @@ class EucaifV2OnTheFly(IterableDataset):
     parameters and projection are all seeded from ``(seed, e, i)``.
     """
 
-    def __init__(self, config, batch_size=64, batches_per_epoch=1000, seed=0, device="cpu", dtype=torch.float32):
+    def __init__(self, config, batch_size=64, batches_per_epoch=1000, seed=0, device="cpu", dtype=torch.float32,
+                 inputs=None):
         if batch_size % 2:
             raise ValueError("batch_size must be even (half BBH, half noise only)")
         self.config, self.batch_size, self.batches_per_epoch = str(config), int(batch_size), int(batches_per_epoch)
         self.seed, self.device, self.dtype, self.epoch = int(seed), device, dtype, 0
         self._gen = None
         cfg = load_config(config)
+        self.inputs = check_inputs(cfg.get("input") if inputs is None else inputs)
+        self._qt = None
         d = cfg["data"]
         fs = float(d["sample_rate"])
         self.frame_slice = (int(round(d["q_padding"] * fs)), int(round((d["q_padding"] + d["frame_length"]) * fs)))
@@ -178,18 +181,36 @@ class EucaifV2OnTheFly(IterableDataset):
             n = self.batch_size // 2
             signal = torch.cat([torch.zeros_like(data["signal_whitened"]), data["signal_whitened"]])
             nan = torch.full((n,), float("nan"))
-            yield {"x": data["x"][order].float(), "y": data["y"][order],
-                   "glitch": data["glitch_whitened"][order].float(), "signal": signal[order].float(),
-                   "n_glitches": torch.as_tensor(data["n_glitches"].astype(np.int64))[order],
-                   "snr": torch.cat([nan, data["snr"].float()])[order],
-                   "tc": torch.cat([nan, data["tc"].float()])[order]}
+            batch = {"x": data["x"][order].float(), "y": data["y"][order],
+                     "glitch": data["glitch_whitened"][order].float(), "signal": signal[order].float(),
+                     "n_glitches": torch.as_tensor(data["n_glitches"].astype(np.int64))[order],
+                     "snr": torch.cat([nan, data["snr"].float()])[order],
+                     "tc": torch.cat([nan, data["tc"].float()])[order]}
+            if self.inputs:
+                if self._qt is None:
+                    self._qt = QTransforms(self.config)
+                batch.update(self._qt.inputs(batch["x"], self.inputs))
+            yield batch
+
+
+INPUTS = ("timeseries", "qscan", "tiles")
+
+
+def check_inputs(kinds):
+    """The model inputs asked for (``input`` in the YAML): a list of ``INPUTS``, or a single name."""
+    kinds = [kinds] if isinstance(kinds, str) else list(kinds or [])
+    unknown = set(kinds) - set(INPUTS)
+    if unknown:
+        raise ValueError(f"input: {sorted(unknown)} not in {INPUTS}")
+    return kinds
 
 
 class QTransforms:
-    """Time-series and Q-transform inputs from batches of stored windows (B, D, L), cut to the frame."""
+    """Time-series and Q-transform inputs from batches of stored windows (B, D, L), cut to the frame.
+    ``config``: a v2 or v3 YAML (its ``data`` and ``qtransform`` sections), as a path or loaded."""
 
     def __init__(self, config, device="cpu", dtype=torch.float32):
-        cfg = load_config(config)
+        cfg = config if isinstance(config, dict) else load_config(config)
         d, q = cfg["data"], cfg["qtransform"]
         self.fs = float(d["sample_rate"])
         self.qpad, self.frame_s = float(d["q_padding"]), float(d["frame_length"])
@@ -217,6 +238,12 @@ class QTransforms:
 
     def inverse(self, tiles, q):
         return self.tile_qt[float(q)].inverse(tiles, q)
+
+    def inputs(self, x, kinds):
+        """The model inputs ``kinds`` (see ``INPUTS``) of stored windows x: {"timeseries": (..., frame samples),
+        "qscan": (..., n_times, n_freqs), "tiles": {Q: (..., rows, cols) complex}}."""
+        make = dict(timeseries=self.frame, qscan=self.qscan, tiles=self.tiles)
+        return {k: make[k](x) for k in check_inputs(kinds)}
 
 
 def plot_check(data, gen, config, path):
