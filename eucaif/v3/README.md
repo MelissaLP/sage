@@ -29,6 +29,51 @@ H1 cache.
 
 The stored window (1 s + 2 s frame + 1 s), the BBH prior, `tc` and the glitch populations are v2.3's.
 
+## Workflow
+
+```mermaid
+flowchart TD
+    subgraph once["Once (offline)"]
+        direction TB
+        DQ["GWOSC timeline: DATA, CAT2, HW injections<br/>+ GWOSC event list (vetoes)"]
+        SEG["segments.py<br/>good network time, ≥ 32 s stretches<br/>→ segments_HL.json"]
+        SRC{"sources.order"}
+        GW["gwosc: fetch_open_data<br/>16 kHz (or 4 kHz)"]
+        FR["frames: TimeSeries.get<br/>on a LIGO/Virgo cluster"]
+        DEC["decimate to 2048 Hz"]
+        CACHE[("cache: float32 .npy pieces<br/>+ .json provenance")]
+        DQ --> SEG --> SRC
+        SRC -->|first| GW --> DEC
+        SRC -->|if gwosc fails| FR --> DEC
+        DEC -->|"download.sub (HTCondor)"| CACHE
+    end
+
+    subgraph fly["Every batch (on the fly, no network)"]
+        direction TB
+        SPLIT["split: gps_blocks or random"]
+        WIN["draw a 32 s window per example<br/>where every detector is cached"]
+        PSD["PSD from the window itself<br/>(median Welch)"]
+        BBH["BBH: SAGE waveform, sidereal time<br/>of the window's GPS · signal.fraction"]
+        GL["glitches: analytic + McGAN<br/>at their SNR · probability or null"]
+        SUM["real strain + BBH + glitches"]
+        WH["whiten (fir or fiducial)<br/>crop the 4 s stored window"]
+        OUT["batch: x, signal, glitch, y, snr,<br/>params, gps, sources, tags, asd"]
+        SPLIT --> WIN --> PSD
+        PSD --> BBH --> SUM
+        PSD --> GL --> SUM
+        WIN --> SUM
+        SUM --> WH --> OUT
+        PSD -.->|ASD| WH
+    end
+
+    SEG --> SPLIT
+    CACHE --> WIN
+    OUT --> TRAIN["make_loader → training"]
+```
+
+The top lane runs once: it finds the usable time from data-quality flags alone, then downloads and decimates the
+strain into the cache. The bottom lane runs for every batch and reads only the cache.
+
 ## Steps
 
 1. **Segments** (done for H1+L1: `eucaif/v3/segments_HL.json`). Good time comes from GWOSC's data-quality flags
