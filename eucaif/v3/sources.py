@@ -3,9 +3,10 @@ Real strain for EuCAIF v3: where it comes from (GWOSC or frames), resampling to 
 
 **Sources** (``sources`` in the YAML, tried in order: the next one is used if one fails, e.g. GWOSC is down):
 
-- ``gwosc``: ``gwpy.timeseries.TimeSeries.fetch_open_data`` (GWOSC open data), at ``sample_rate`` (16384 or 4096
-  Hz). GWOSC serves offline-calibrated strain; its 4096 Hz files were already downsampled by GWOSC with its own
-  filter, so 16384 Hz keeps the same resampling as frames.
+- ``gwosc``: ``gwpy.timeseries.TimeSeries.fetch_open_data`` (GWOSC open data), at ``sample_rate``: 16384 Hz by
+  default (the same decimation as frames, x8 to 2048 Hz). 4096 Hz files can be downloaded too (4x less traffic),
+  but they change the decimation: GWOSC's own downsampling filter, then x2 here. GWOSC serves
+  offline-calibrated strain.
 - ``frames``: ``TimeSeries.get(channel, frametype=...)`` on a LIGO/Virgo cluster, with ``channels`` and
   ``frametypes`` per detector in the YAML. Their calibration version need not be GWOSC's: the two sources are not
   identical (see the v3 README), so every cached piece records which source, channel and frame type it came from.

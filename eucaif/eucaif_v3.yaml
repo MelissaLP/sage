@@ -8,7 +8,8 @@ data:
 sources:                         # eucaif/v3/sources.py; tried in this order (the next if one fails)
   order: [gwosc, frames]
   gwosc:
-    sample_rate: 16384           # 16384 (same resampling as frames) or 4096 (already downsampled by GWOSC)
+    sample_rate: 16384           # default; same decimation as frames (x8 to 2048 Hz). 4096 also works (4x less
+                                 # to download) but changes the decimation: GWOSC's own filter, then x2 here
   frames:                        # on a LIGO/Virgo cluster: TimeSeries.get(channel, frametype=...)
     # EXAMPLES ONLY: set the channel and frame type of the calibration you want on your cluster
     channels: {H1: H1:GDS-CALIB_STRAIN_CLEAN, L1: L1:GDS-CALIB_STRAIN_CLEAN, V1: V1:Hrec_hoft_16384Hz}
