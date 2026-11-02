@@ -49,7 +49,6 @@ picks its Q per detector (gwpy's behaviour), so H1 and L1 can differ. Made, with
   uniformly, with the **Blip's SNR distribution** (5-200, index 2.3; `snr_like: Blip`), drawn
   independently of the O3a glitches. In the glitch table and `glitch_classes` they come after the
   O3a classes.
-- `input`: the model inputs added to each on-the-fly batch (default `[timeseries]`; see below).
 - `qtransform`: Q-scan grid (Q 4-64, 15-1000 Hz, 256 x 256 over the frame) and the Q-planes for
   invertible tiles (5.7 and 45.3).
 
@@ -92,58 +91,42 @@ mostly Tomtes, H1 mostly scattered light. Not modelled (no analytic shape): Fast
 
 ## Training on the fly
 
-Choose the model inputs with `input` in the YAML, or `inputs=` in the code. The loader then adds them to
-every batch:
-
-| `input` | Batch key | Shape | What |
-|---|---|---|---|
-| `timeseries` | `timeseries` | (B, 2, 4096) | whitened time series of the 2 s frame |
-| `qscan` | `qscan` | (B, 2, 256, 256) | gwpy-exact Q-scan image of the frame (time × frequency) |
-| `tiles` | `tiles` | {5.7: (B, 2, 22, 8192), 45.3: (B, 2, 183, 1024)} complex | invertible Q-tiles, one entry per Q |
+The DataLoader workers are CPU processes: they generate the whitened stored windows `x` in parallel with
+training. Model inputs are computed afterwards, in the main process, on the GPU. CUDA should not be used inside
+workers: forked processes cannot initialise it, and spawned ones each take their own GPU context and memory.
 
 ```python
 from torch.utils.data import DataLoader
-from eucaif.eucaif_v2 import EucaifV2OnTheFly
+from eucaif.eucaif_v2 import EucaifV2OnTheFly, QTransforms
 
-train = EucaifV2OnTheFly("eucaif/eucaif_v2.yaml", batch_size=64, batches_per_epoch=1000, seed=0,
-                         inputs=["timeseries", "qscan"])          # None: the YAML's `input`
-loader = DataLoader(train, batch_size=None, num_workers=8)       # items are whole, shuffled batches
-
-for epoch in range(n_epochs):
-    train.set_epoch(epoch)                                        # fresh examples every epoch
-    for batch in loader:
-        ts, img = batch["timeseries"].cuda(), batch["qscan"].cuda()
-        y = batch["y"].cuda()                                     # 1: BBH present
-        ...
-```
-
-These are computed in the DataLoader workers, on CPU: a Q-scan costs ~0.4 s per batch of 64 per worker.
-The tiles are large (~180 MB per batch of 64) to pass between processes. To compute either on the GPU
-instead, set `input: []` and call `QTransforms` yourself:
-
-```python
-from eucaif.eucaif_v2 import QTransforms
-
-qt = QTransforms("eucaif/eucaif_v2.yaml", device="cuda")
+train = EucaifV2OnTheFly("eucaif/eucaif_v2.yaml", batch_size=64, batches_per_epoch=1000, seed=0)
+loader = DataLoader(train, batch_size=None, num_workers=8,       # items are whole, shuffled batches
+                    pin_memory=True)                              # faster copies to the GPU
+qt = QTransforms("eucaif/eucaif_v2.yaml", device="cuda")         # Q-transforms on the GPU
 
 for epoch in range(n_epochs):
     train.set_epoch(epoch)                                        # fresh examples every epoch
     for batch in loader:
-        x = batch["x"].cuda()                                     # (B, 2, 8192): H1, L1 stored window
+        x = batch["x"].cuda(non_blocking=True)                    # (B, 2, 8192): H1, L1 stored window
         y = batch["y"].cuda()                                     # 1: BBH present
-        # pick one input representation:
-        inp = qt.frame(x)                                         # (B, 2, 4096) time series, the frame
-        inp = qt.qscan(x)                                         # (B, 2, 256, 256) Q-scan of the frame
-        tiles = qt.tiles(x)                                       # {5.7: (B, 2, 22, 8192), 45.3: (B, 2, 183, 1024)}
+        inp = qt.inputs(x, ["timeseries", "qscan"])               # any of timeseries, qscan, tiles
         ...
 ```
+
+| Input | Shape | What |
+|---|---|---|
+| `timeseries` (`qt.frame(x)`) | (B, 2, 4096) | whitened time series of the 2 s frame |
+| `qscan` (`qt.qscan(x)`) | (B, 2, 256, 256) | gwpy-exact Q-scan image of the frame (time × frequency) |
+| `tiles` (`qt.tiles(x)`) | {5.7: (B, 2, 22, 8192), 45.3: (B, 2, 183, 1024)} complex | invertible Q-tiles, one entry per Q |
+
+The Q-scan and tile settings are in the YAML's `qtransform` section.
 
 - Each item also has `glitch` and `signal` (whitened, per detector: denoising / glitch-removal
   targets), `n_glitches` (B, 2), `snr` and `tc` (NaN for noise-only examples).
 - Batch *i* of epoch *e* is fully determined by `(seed, e, i)` (noise, glitches, BBH parameters and
   projection), whatever the number of workers.
-- Speed: ~180 examples/s (5.7 ms each) per single-threaded CPU process for generation, before any
-  Q-transform input.
+- Speed: ~180 examples/s (5.7 ms each) per single-threaded CPU process for generation. Q-transforms
+  also run on the CPU (`QTransforms(..., device="cpu")`), but slower: ~0.4 s for a Q-scan of 64 examples.
 - `qt.qscan` is gwpy's Q-scan (one Q per example and detector, median-normalised), computed on the
   stored window and output on the frame only. `qt.tiles` are invertible: `qt.inverse(tiles[q], q)`
   returns the time series (then `qt.frame`), so a network can work in the Q domain and be trained

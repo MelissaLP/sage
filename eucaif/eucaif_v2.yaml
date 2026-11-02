@@ -40,10 +40,7 @@ nonphysical_glitches:            # McGAN's training shapes: NOT real glitch clas
   snr_like: Blip                 # SNR range and index copied from the Blip (5-200, index 2.3), deliberately
   # Drawn independently of the O3a glitches above (same f_low); probability: 0 removes them.
 
-input: [timeseries]              # model inputs added to each on-the-fly batch: any of timeseries (the frame),
-                                 # qscan (gwpy-exact image), tiles (invertible complex Q-tiles); computed in the
-                                 # DataLoader workers (CPU). [] to compute them yourself, e.g. on the GPU
-qtransform:                      # settings of the qscan and tiles inputs
+qtransform:                      # settings for Q-transform inputs (computed on the GPU at training time)
   qrange: [4, 64]                # Q-scan: the plane with the loudest tile, per example and detector
   frange: [15, 1000]
   n_times: 256                   # output grid over the frame (outseg), as images

@@ -90,11 +90,3 @@ def test_loader_workers_draw_different_windows(config):
                          overrides=dict(signal=dict(fraction=0.0), glitches=None))
     out = list(loader)
     assert len(out) == 2 and not torch.equal(out[0]["gps"], out[1]["gps"])
-
-
-def test_model_inputs(config):
-    b = next(iter(_stream(config, batches=1, inputs=["timeseries", "qscan"])))
-    torch.testing.assert_close(b["timeseries"], b["x"][..., 2048:6144])
-    assert b["qscan"].shape == (4, 2, 256, 256) and "tiles" not in b
-    assert "timeseries" in next(iter(_stream(config, batches=1)))                  # the YAML's input
-    assert "timeseries" not in next(iter(_stream(config, batches=1, inputs=[])))

@@ -74,10 +74,7 @@ nonphysical_glitches:            # as v2: one McGAN shape per (example, detector
   probability: 1.0
   per_window: [1, 1]
   snr_like: Blip
-input: [timeseries]              # model inputs added to each batch by make_loader: any of timeseries (the frame),
-                                 # qscan (gwpy-exact image), tiles (invertible complex Q-tiles); computed in the
-                                 # DataLoader workers (CPU). [] to compute them yourself, e.g. on the GPU
-qtransform:                      # settings of the qscan and tiles inputs (as v2: eucaif_v2.QTransforms)
+qtransform:                      # Q-transform model inputs (eucaif_v2.QTransforms, as v2), computed on the GPU
   qrange: [4, 64]                # Q-scan: the plane with the loudest tile, per example and detector
   frange: [15, 1000]
   n_times: 256                   # output grid over the frame (outseg), as images

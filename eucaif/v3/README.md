@@ -49,7 +49,7 @@ flowchart TD
         DEC -->|"download.sub (HTCondor)"| CACHE
     end
 
-    subgraph fly["Every batch (on the fly, no network)"]
+    subgraph fly["Every batch: DataLoader workers (CPU, no network)"]
         direction TB
         SPLIT["split: gps_blocks or random"]
         WIN["draw a 32 s window per example<br/>where every detector is cached"]
@@ -59,18 +59,17 @@ flowchart TD
         SUM["real strain + BBH + glitches"]
         WH["whiten (fir or fiducial)<br/>crop the 4 s stored window"]
         OUT["batch: x, signal, glitch, y, snr,<br/>params, gps, sources, tags, asd"]
-        INP["model inputs (input):<br/>timeseries · qscan · tiles"]
         SPLIT --> WIN --> PSD
         PSD --> BBH --> SUM
         PSD --> GL --> SUM
         WIN --> SUM
-        SUM --> WH --> OUT --> INP
+        SUM --> WH --> OUT
         PSD -.->|ASD| WH
     end
 
     SEG --> SPLIT
     CACHE --> WIN
-    INP --> TRAIN["make_loader → training"]
+    OUT --> INP["main process, GPU: QTransforms<br/>timeseries · qscan · tiles"] --> TRAIN["training"]
 ```
 
 The top lane runs once: it finds the usable time from data-quality flags alone, then downloads and decimates the
@@ -166,18 +165,31 @@ To add a method, subclass `Whitener` in `eucaif/v3/whitening.py`, set `name`, im
 
 ## Training on the fly
 
+The DataLoader workers are CPU processes: they read the cache, inject and whiten, in parallel with training.
+Model inputs (Q-transforms) are computed afterwards, in the main process, on the GPU, as in v2. CUDA should not
+be used inside workers: forked processes cannot initialise it, and spawned ones each take their own GPU context
+and memory.
+
 ```python
+from eucaif.eucaif_v2 import QTransforms
 from eucaif.v3.dataset import make_loader
 
-loader = make_loader("eucaif/eucaif_v3.yaml", split="train", batch_size=64, num_workers=4,
-                     inputs=["timeseries", "qscan"],              # None: the YAML's `input`
+loader = make_loader("eucaif/eucaif_v3.yaml", split="train", batch_size=64, num_workers=4, pin_memory=True,
                      overrides={"signal": {"fraction": 0.5}})     # e.g. {"signal": {"fraction": 0}, "glitches": None}
+qt = QTransforms(loader.dataset.cfg, device="cuda")              # the YAML's qtransform settings, on the GPU
 for epoch in range(10):
     loader.dataset.set_epoch(epoch)
     for b in loader:
-        ts, img, y = b["timeseries"], b["qscan"], b["y"]
+        x = b["x"].cuda(non_blocking=True)                        # (B, D, 8192) whitened stored window
+        inp = qt.inputs(x, ["timeseries", "qscan"])               # any of timeseries, qscan, tiles
         ...
 ```
+
+| Input | Shape | What |
+|---|---|---|
+| `timeseries` (`qt.frame(x)`) | (B, D, 4096) | whitened time series of the 2 s frame |
+| `qscan` (`qt.qscan(x)`) | (B, D, 256, 256) | gwpy-exact Q-scan image of the frame (time × frequency) |
+| `tiles` (`qt.tiles(x)`) | {5.7: (B, D, 22, 8192), 45.3: (B, D, 183, 1024)} complex | invertible Q-tiles, one entry per Q |
 
 - **No network access:** the loader reads only the cache.
 - **Partial downloads work:** windows are drawn only where the cache has data for every detector; the log says
@@ -189,7 +201,7 @@ A batch (B examples, D detectors, L = 8192 samples = 4 s at 2048 Hz):
 
 | Key | Shape | What |
 |---|---|---|
-| `x` | (B, D, L) float32 | whitened data + injections, the stored window |
+| `x` | (B, D, L) float32 | whitened data + injections, the stored window (model inputs: above) |
 | `signal`, `glitch` | (B, D, L) float32 | the injected BBH and glitches, whitened alone (targets) |
 | `y` | (B,) | 1 if a BBH was injected |
 | `snr`, `snr_det` | (B,), (B, D) | network and per-detector optimal SNR of the BBH (NaN without one) |
@@ -202,19 +214,6 @@ A batch (B examples, D detectors, L = 8192 samples = 4 s at 2048 Hz):
 | `asd_frequencies`, `asd` | (F,), (B, D, F) | the ASD used for whitening and SNRs |
 
 The 2 s frame is `x[..., 2048:6144]`. The extra 1 s on each side is for Q-transforms.
-
-**Model inputs.** `input` in the YAML (or `inputs=`) adds any of these to each batch, exactly as in v2:
-
-| `input` | Batch key | Shape | What |
-|---|---|---|---|
-| `timeseries` (default) | `timeseries` | (B, D, 4096) | whitened time series of the 2 s frame |
-| `qscan` | `qscan` | (B, D, 256, 256) | gwpy-exact Q-scan image of the frame (time × frequency) |
-| `tiles` | `tiles` | {5.7: (B, D, 22, 8192), 45.3: (B, D, 183, 1024)} complex | invertible Q-tiles, one entry per Q |
-
-They use the `qtransform` settings and are computed in the DataLoader workers, on CPU. A Q-scan costs ~0.4 s
-per batch of 64 per worker, and tiles are ~180 MB per batch to pass between processes. To compute them on the
-GPU, set `input: []` and call `eucaif.eucaif_v2.QTransforms(cfg, device="cuda")` on `b["x"]` (see the v2
-README).
 
 ## Not done yet
 

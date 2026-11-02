@@ -8,7 +8,7 @@ the config asks (``signal.fraction: 0`` and ``glitches: null`` give real noise a
     for epoch in range(10):
         loader.dataset.set_epoch(epoch)
         for b in loader:          # b["x"]: (64, D, L) float32 whitened; b["y"], b["gps"], b["glitch_events"], ...
-            ...                   # + the model inputs of ``input`` in the YAML: b["timeseries"], b["qscan"], b["tiles"]
+            ...
 
 Windows are drawn where the cache has data for every detector (a partial download works). With ``split.mode:
 random`` every split draws over all the data, as ggwd FM production; with ``gps_blocks`` each split only from its
@@ -23,7 +23,6 @@ import copy
 import numpy as np
 from torch.utils.data import DataLoader, IterableDataset, get_worker_info
 
-from eucaif.eucaif_v2 import QTransforms, check_inputs
 from eucaif.v3.generator import EucaifV3, load_config
 
 
@@ -32,12 +31,11 @@ class EucaifV3Stream(IterableDataset):
 
     ``config``: path to the v3 YAML or a loaded config (``generator.load_config``). ``batches``: batches per epoch
     over all workers (None: endless). ``overrides``: {section: {key: value}} applied to the config (e.g.
-    ``{"signal": {"fraction": 0}}``). ``inputs``: model inputs added to each batch (None: the YAML's ``input``),
-    any of ``timeseries``, ``qscan``, ``tiles`` (``eucaif_v2.QTransforms`` with the YAML's ``qtransform``).
+    ``{"signal": {"fraction": 0}}``).
     """
 
     def __init__(self, config, split="train", batch_size=64, seed=0, batches=None, overrides=None, device="cpu",
-                 inputs=None, log=print):
+                 log=print):
         cfg = load_config(config) if not isinstance(config, dict) else copy.deepcopy(config)
         for section, values in (overrides or {}).items():
             cfg[section] = values if values is None else dict(cfg.get(section) or {}, **values)
@@ -45,7 +43,6 @@ class EucaifV3Stream(IterableDataset):
         self.cfg, self.split, self.batch_size, self.seed = cfg, split, int(batch_size), int(seed)
         self.batches, self.device, self.log = batches, device, log
         self.epoch = 0
-        self.inputs = check_inputs(cfg.get("input") if inputs is None else inputs)
 
     def set_epoch(self, epoch):
         """Different windows and injections per epoch (call before iterating, as ``DistributedSampler``)."""
@@ -57,22 +54,16 @@ class EucaifV3Stream(IterableDataset):
         seed = int(np.random.SeedSequence([self.seed, self.epoch, worker]).generate_state(1)[0])
         gen = EucaifV3(self.cfg, split=self.split, seed=seed, batch_size=self.batch_size, device=self.device,
                        log=self.log if worker == 0 else (lambda *a: None))
-        qt = QTransforms(self.cfg) if self.inputs else None
-
-        def batch():
-            b = gen.batch()
-            return dict(b, **qt.inputs(b["x"], self.inputs)) if qt else b
-
         if self.batches is None:
             while True:
-                yield batch()
+                yield gen.batch()
         for _ in range(self.batches // workers + (worker < self.batches % workers)):
-            yield batch()
+            yield gen.batch()
 
 
 def make_loader(config, split="train", batch_size=64, num_workers=0, seed=0, batches=None, overrides=None,
-                inputs=None, device="cpu", **loader_kwargs):
+                device="cpu", **loader_kwargs):
     """A ``DataLoader`` over ``EucaifV3Stream`` (whole batches, so ``batch_size=None`` for the loader)."""
     ds = EucaifV3Stream(config, split=split, batch_size=batch_size, seed=seed, batches=batches,
-                        overrides=overrides, inputs=inputs, device=device)
+                        overrides=overrides, device=device)
     return DataLoader(ds, batch_size=None, num_workers=num_workers, **loader_kwargs)

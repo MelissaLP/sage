@@ -62,16 +62,16 @@ def test_qtransform_inputs():
     assert float((X - R)[..., band].abs().max() / X[..., band].abs().max()) < 1e-4
 
 
-def test_on_the_fly_model_inputs():
-    plain = next(iter(EucaifV2OnTheFly(CONFIG, batch_size=4, batches_per_epoch=1, seed=3, inputs=[])))
-    b = next(iter(EucaifV2OnTheFly(CONFIG, batch_size=4, batches_per_epoch=1, seed=3,
-                                   inputs=["timeseries", "qscan", "tiles"])))
-    assert "timeseries" not in plain and torch.equal(plain["x"], b["x"])          # inputs do not change the data
-    torch.testing.assert_close(b["timeseries"], b["x"][..., 2048:6144])
-    assert b["qscan"].shape == (4, 2, 256, 256) and set(b["tiles"]) == {5.7, 45.3}
-    assert "timeseries" in next(iter(EucaifV2OnTheFly(CONFIG, batch_size=4, batches_per_epoch=1)))  # the YAML's
+def test_qtransforms_inputs_helper_and_v3_config():
+    qt = QTransforms(CONFIG)
+    x = torch.randn(3, 2, 8192)
+    out = qt.inputs(x, ["timeseries", "qscan"])
+    torch.testing.assert_close(out["timeseries"], x[..., 2048:6144])
+    assert out["qscan"].shape == (3, 2, 256, 256) and "tiles" not in out
     with pytest.raises(ValueError, match="not in"):
-        EucaifV2OnTheFly(CONFIG, inputs=["spectrogram"])
+        qt.inputs(x, ["spectrogram"])
+    from eucaif.v3.generator import load_config as load_v3
+    assert QTransforms(load_v3("eucaif/eucaif_v3.yaml")).qscan(x).shape == (3, 2, 256, 256)
 
 
 def test_written_file(tmp_path):
