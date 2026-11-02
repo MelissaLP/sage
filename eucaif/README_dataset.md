@@ -116,6 +116,14 @@ h5py reads only the slices you ask for, so a dataset larger than memory can be
 streamed batch by batch, for example with a `torch.utils.data.Dataset` that
 indexes the file.
 
+To check a file, or look at one example, use `eucaif/inspect_dataset.py` (works on v1, v2 and glitch-frame files):
+
+```bash
+python eucaif/inspect_dataset.py summary FILE          # provenance, size, classes, SNRs, glitch classes
+python eucaif/inspect_dataset.py check FILE            # consistency checks; exit code 1 if one fails
+python eucaif/inspect_dataset.py example FILE 12 --fig ex12.png   # labels, glitches, time series + Q-scan
+```
+
 ## Generating
 
 ```bash

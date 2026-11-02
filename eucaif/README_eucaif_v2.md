@@ -160,12 +160,22 @@ and `tc` from the stored-window start, plus:
 glitch              (N, 2, 8192)  whitened glitches alone (zeros where none)
 n_glitches          (N, 2)        glitches per example and detector
 glitches/example    one row per glitch: example index, detector index, class index (attrs glitch_classes),
-glitches/...        time (s from the stored-window start), snr, and the generator parameters
+glitches/...        time (s from the stored-window start), snr, snr_in_frame and frame_fraction (the
+                    SNR inside the 2 s frame and the share of SNR^2 there; files written after
+                    v2.3 only), and the generator parameters
 attrs               v1's, plus eucaif_v2_config (the full YAML), frame_slice, glitch_population,
                     dataset_version = "eucaif v2.3" ("eucaif v2.2" / "eucaif v2.1" / "eucaif v2" in older files)
 ```
 
 About 0.13 MB per example in float32 (strain and glitches): 10,000 examples are ~1.3 GB.
+
+To check a file, or look at one example, use `eucaif/inspect_dataset.py` (works on v1, v2 and glitch-frame files):
+
+```bash
+python eucaif/inspect_dataset.py summary FILE          # provenance, size, classes, SNRs, glitch classes
+python eucaif/inspect_dataset.py check FILE            # consistency checks; exit code 1 if one fails
+python eucaif/inspect_dataset.py example FILE 12 --fig ex12.png   # labels, glitches, time series + Q-scan
+```
 
 ## Reproducibility and version
 

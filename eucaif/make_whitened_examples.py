@@ -178,6 +178,11 @@ class WhitenedExampleGenerator:
     glitch_f_low : float or None
         Glitch content below this frequency (Hz) is removed before setting
         each glitch's SNR.
+    glitch_frame : (float, float) or None
+        The network's input frame, in seconds of the sample window (v2: the
+        2 s between the Q-transform paddings). The glitch table then also
+        holds each glitch's SNR inside it (``snr_in_frame``) and its share of
+        SNR^2 there (``frame_fraction``). ``None``: the whole sample window.
     """
 
     def __init__(
@@ -192,6 +197,7 @@ class WhitenedExampleGenerator:
         merger_margin=0.25,
         glitches=None,
         glitch_f_low=None,
+        glitch_frame=None,
     ):
         data_cfg = get_data_cfg()
         self.waveform_yaml = str(waveform_yaml)
@@ -230,6 +236,7 @@ class WhitenedExampleGenerator:
             glitches = [glitches]
         self.glitches = list(glitches) if glitches is not None else None
         self.glitch_f_low = glitch_f_low
+        self.glitch_frame = tuple(glitch_frame) if glitch_frame is not None else None
         if self.glitches is not None:
             for pop in self.glitches:
                 if list(pop.detectors) != self.detectors[: len(asd_names)]:
@@ -361,8 +368,10 @@ class WhitenedExampleGenerator:
             window = (self.padding_s, self.padding_s + self.sample_length_s)
             glitch_td = torch.zeros_like(x)
             events = [[] for _ in range(x.shape[0] * x.shape[1])]
+            frame = window if self.glitch_frame is None else tuple(self.padding_s + t for t in self.glitch_frame)
             for pop in self.glitches:
-                glitch_td, ev = pop.inject(glitch_td, self.asd, g, f_low=self.glitch_f_low, window=window)
+                glitch_td, ev = pop.inject(glitch_td, self.asd, g, f_low=self.glitch_f_low, window=window,
+                                           frame=frame)
                 events = [a + b for a, b in zip(events, ev)]
             x = x + glitch_td
         x_w = self.whitener(x)[..., self._crop]
@@ -393,7 +402,7 @@ class WhitenedExampleGenerator:
             out["snr_from_whitened"] = sig_w.double().pow(2).sum(-1).sum(-1).sqrt().float()
         return out
 
-    GLITCH_COLUMNS = ["example", "detector", "class", "time", "snr"]
+    GLITCH_COLUMNS = ["example", "detector", "class", "time", "snr", "snr_in_frame", "frame_fraction"]
 
     def _glitch_table(self, events, n_examples):
         """Glitch counts (n, D) and one row per glitch: example, detector and class indices, time
@@ -406,8 +415,8 @@ class WhitenedExampleGenerator:
             ex, det = divmod(i, self.D)
             counts[ex, det] = len(evs)
             for e in evs:
-                for k, v in zip(self.GLITCH_COLUMNS, (ex, det, classes.index(e["cls"]),
-                                                      e["time"] - self.padding_s, e["snr"])):
+                for k, v in zip(self.GLITCH_COLUMNS, (ex, det, classes.index(e["cls"]), e["time"] - self.padding_s,
+                                                      e["snr"], e["snr_in_frame"], e["frame_fraction"])):
                     rows[k].append(v)
                 for k in params:
                     rows[k].append(e["params"].get(k, np.nan))

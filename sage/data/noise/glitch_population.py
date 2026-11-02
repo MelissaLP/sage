@@ -253,10 +253,14 @@ class GlitchPopulation:
         return self.draw_batch(segment_duration, [detector], generator, dtype, device, window)[0]
 
     def apply(self, strain: Tensor, asd: Tensor, events: list, taper_alpha: float = 0.1, f_low: float = None,
-              f_high: float = None, lowpass_order=3, max_rows: int = 512) -> Tensor:
+              f_high: float = None, lowpass_order=3, max_rows: int = 512, frame=None) -> Tensor:
         """Add the glitches of ``events`` (one list per series of ``strain``, flattened leading index)
         to coloured strain (..., T): for each, exactly ``add_glitch`` with its ``time``, ``snr`` and its
-        class's ``representation`` (``"strain"`` for the analytic models, ``"whitened"`` for gengli)."""
+        class's ``representation`` (``"strain"`` for the analytic models, ``"whitened"`` for gengli).
+
+        ``frame`` (start, end) in seconds of the series: also record in each event the share of its
+        SNR^2 inside the frame (``frame_fraction``, from its whitened shape) and ``snr_in_frame``
+        (``snr * sqrt(frame_fraction)``), e.g. for glitches partly outside a cropped input."""
         T = strain.shape[-1]
         flat = strain.reshape(-1, T)
         if len(events) != flat.shape[0]:
@@ -267,8 +271,8 @@ class GlitchPopulation:
         for s, evs in enumerate(events):
             for e in evs:
                 rep = self.classes[e["cls"]]["representation"]
-                g = groups.setdefault((e["glitch"].shape[-1], rep), ([], [], [], []))
-                for lst, v in zip(g, (s, e["glitch"], e["time"], e["snr"])):
+                g = groups.setdefault((e["glitch"].shape[-1], rep), ([], [], [], [], []))
+                for lst, v in zip(g, (s, e["glitch"], e["time"], e["snr"], e)):
                     lst.append(v)
         if not groups:
             return strain.clone()
@@ -280,7 +284,9 @@ class GlitchPopulation:
         mask = _band_mask(T, fs, f_low, f_high, dev, work, lowpass_order)
         white = torch.zeros(flat.shape[0], T // 2 + 1, dtype=torch.complex128 if work == torch.float64
                             else torch.complex64, device=dev)
-        for (L, rep), (series, glitches, times, snrs) in groups.items():
+        if frame is not None:
+            f0, f1 = (int(round(v * fs)) for v in frame)
+        for (L, rep), (series, glitches, times, snrs, evs) in groups.items():
             win = tukey_window(L, taper_alpha, device=dev, dtype=work) if taper_alpha else None
             for a in range(0, len(series), max_rows):
                 b = a + max_rows
@@ -298,15 +304,24 @@ class GlitchPopulation:
                 scale = torch.where(current > 0, target / current.clamp_min(torch.finfo(work).tiny),
                                     torch.zeros_like(current))
                 white.index_add_(0, idx, W * scale[:, None])
+                if frame is not None:                                     # whitened energy inside the frame
+                    w2 = torch.fft.irfft(W, n=T, dim=-1).double() ** 2
+                    total = w2.sum(-1)
+                    frac = torch.where(total > 0, w2[:, f0:f1].sum(-1) / total.clamp_min(1e-300),
+                                       torch.zeros_like(total))
+                    for e, fr in zip(evs[a:b], frac.tolist()):
+                        e["frame_fraction"] = fr
+                        e["snr_in_frame"] = float(e["snr"]) * fr ** 0.5
         h = torch.fft.irfft(white * asd, n=T, dim=-1)
         return (flat + h.to(strain.dtype)).reshape(strain.shape)
 
     def inject(self, strain: Tensor, asd: Tensor, generator: torch.Generator = None, taper_alpha: float = 0.1,
-               f_low: float = None, f_high: float = None, lowpass_order=3, window=None):
+               f_low: float = None, f_high: float = None, lowpass_order=3, window=None, frame=None):
         """Draw and add glitches to coloured strain (..., D, T), the detectors in config order.
 
         ``asd`` is the strain's one-sided ASD, (F,) or broadcastable to (..., D, F), as for
-        ``add_glitch``. ``window`` restricts the glitches to part of the series (see ``draw_batch``).
+        ``add_glitch``. ``window`` restricts the glitches to part of the series (see ``draw_batch``);
+        ``frame`` adds each event's in-frame SNR (see ``apply``).
         Returns the strain with glitches and, for each series (flattened leading index), its list
         of events.
         """
@@ -319,5 +334,5 @@ class GlitchPopulation:
         events = self.draw_batch(T / self.sample_rate, dets, generator, dtype=strain.dtype, device=strain.device,
                                  window=window)
         out = self.apply(strain, asd, events, taper_alpha=taper_alpha, f_low=f_low, f_high=f_high,
-                         lowpass_order=lowpass_order)
+                         lowpass_order=lowpass_order, frame=frame)
         return out, events

@@ -274,3 +274,21 @@ def test_population_classes_take_their_generators_representation():
         GlitchPopulation({"sample_rate": FS, "classes": {"X": {"generator": "ringdown", "representation": "raw"}}})
     with pytest.raises(ValueError):
         add_glitch(torch.zeros(1, 4096), torch.zeros(1, 64), _asd(), 5.0, FS, representation="raw")
+
+
+def test_population_records_the_snr_inside_a_frame():
+    from sage.data.noise.glitch_population import GlitchPopulation
+
+    pop = GlitchPopulation({"sample_rate": FS, "classes": {"SG": {"generator": "sine_gaussian"}}})
+    g = torch.as_tensor(_sine_gaussian(), dtype=torch.float64)
+    events = [[dict(cls="SG", time=t, snr=10.0, glitch=g) for t in (2.0, 3.0, 5.0)]]
+    pop.apply(torch.zeros(1, int(8 * FS), dtype=torch.float64), _asd(n_freq=int(4 * FS) + 1), events,
+              frame=(1.0, 3.0))
+    inside, edge, outside = events[0]
+    assert inside["frame_fraction"] == pytest.approx(1.0, abs=1e-6)            # centred in the frame
+    assert edge["frame_fraction"] == pytest.approx(0.5, abs=0.02)              # centred on its edge
+    assert outside["frame_fraction"] == pytest.approx(0.0, abs=1e-6)
+    assert edge["snr_in_frame"] == pytest.approx(10.0 * edge["frame_fraction"] ** 0.5)
+    plain = [[dict(cls="SG", time=2.0, snr=10.0, glitch=g)]]
+    pop.apply(torch.zeros(1, int(8 * FS), dtype=torch.float64), _asd(n_freq=int(4 * FS) + 1), plain)
+    assert "snr_in_frame" not in plain[0][0]                                     # only when a frame is given

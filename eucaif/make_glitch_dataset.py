@@ -24,7 +24,8 @@ HDF5 layout
     t            (L,)       time in s from the start of the frame (negative in the left padding)
     n_glitches   (n, D)     glitches per frame and detector
     glitches/    one row per glitch: frame, detector (index), class (index), time (s from the frame
-                 start, the glitch centre or a ringdown's start), snr, and every generator parameter
+                 start, the glitch centre or a ringdown's start), snr, snr_in_frame and frame_fraction
+                 (its SNR inside the frame and share of SNR^2 there), and every generator parameter
                  (NaN where a class does not have it)
     attrs        classes, detectors, config text, dataset settings, seed, command, code version
 
@@ -101,14 +102,16 @@ class GlitchDatasetGenerator:
                                        device=self.device)[0]
         noise = torch.as_tensor(noise, device=self.device).to(self.dtype).reshape(n, self.D, self.N)
         g = torch.Generator().manual_seed(int(chunk_seed))
+        t0 = self.fduration / 2 + self.qpad_s            # frame start, in s from the generated start
         glitches, events = self.pop.inject(torch.zeros_like(noise), self.asd.to(self.device), g,
-                                           f_low=self.f_low, window=self.glitch_window)
+                                           f_low=self.f_low, window=self.glitch_window,
+                                           frame=(t0, t0 + self.frame_s))
         x = self.whitener(noise + glitches)
         target = self.whitener(glitches)
 
-        rows = {k: [] for k in ["frame", "detector", "class", "time", "snr"] + self.param_fields}
+        rows = {k: [] for k in ["frame", "detector", "class", "time", "snr", "snr_in_frame", "frame_fraction"]
+                + self.param_fields}
         counts = np.zeros((n, self.D), dtype=np.int16)
-        t0 = self.fduration / 2 + self.qpad_s            # frame start, in s from the generated start
         for i, evs in enumerate(events):
             frame, det = divmod(i, self.D)
             counts[frame, det] = len(evs)
@@ -118,6 +121,8 @@ class GlitchDatasetGenerator:
                 rows["class"].append(self.classes.index(e["cls"]))
                 rows["time"].append(e["time"] - t0)
                 rows["snr"].append(e["snr"])
+                rows["snr_in_frame"].append(e["snr_in_frame"])
+                rows["frame_fraction"].append(e["frame_fraction"])
                 for k in self.param_fields:
                     rows[k].append(e["params"].get(k, np.nan))
         table = {k: np.asarray(v, dtype=np.int32 if k in ("frame", "detector", "class") else np.float64)
@@ -159,7 +164,7 @@ def write_dataset(gen, out_path, n_frames, chunk=500, store_dtype="float32"):
         dg = f.create_dataset("glitch", shape=(n_frames, D, L), dtype=store_dtype, chunks=(min(32, n_frames), D, L))
         dn = f.create_dataset("n_glitches", shape=(n_frames, D), dtype="int16")
         f.create_dataset("t", data=gen.t.numpy())
-        cols = ["frame", "detector", "class", "time", "snr"] + gen.param_fields
+        cols = ["frame", "detector", "class", "time", "snr", "snr_in_frame", "frame_fraction"] + gen.param_fields
         dt = {k: ("int32" if k in ("frame", "detector", "class") else "float64") for k in cols}
         dcol = {k: f.create_dataset(f"glitches/{k}", shape=(0,), maxshape=(None,), dtype=dt[k], chunks=(65536,))
                 for k in cols}

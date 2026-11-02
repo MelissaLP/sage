@@ -216,7 +216,8 @@ A batch (B examples, D detectors, L = 8192 samples = 4 s at 2048 Hz):
 | `params` | dict of (B,) | BBH parameters |
 | `gps` | (B,) float64 | GPS time of the stored window's first sample |
 | `sources` | B × D | which source each detector's data came from |
-| `glitch_events` | B lists | injected glitches: class, SNR, detector, time, GPS |
+| `fplus`, `fcross`, `delay` | (B, D) | the BBH's antenna factors and arrival delay from the geocentre (s), at the window's GPS time (NaN without one) |
+| `glitch_events` | B lists | injected glitches: class, SNR, `snr_in_frame` and `frame_fraction` (SNR inside the 2 s frame and the share of SNR² there), detector, time, GPS |
 | `tags` | B × D | labelled real glitches in the window (`None`: no table) |
 | `asd_frequencies`, `asd` | (F,), (B, D, F) | the ASD used for whitening and SNRs |
 

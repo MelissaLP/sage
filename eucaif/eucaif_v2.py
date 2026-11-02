@@ -128,7 +128,8 @@ def make_generator(config, seed=0, device="cpu", dtype=torch.float32, batch_size
         _prior_with_tc(cfg, tmp.name), asd_names=d["asd"], snr_range=cfg["signal"].get("snr_range"),
         fduration=float(d["whitening_fduration"]), highpass=d["whitening_highpass"], dtype=dtype,
         seed=seed, merger_margin=d["q_padding"] + 0.25, glitches=_populations(cfg),
-        glitch_f_low=cfg["glitches"].get("f_low"))
+        glitch_f_low=cfg["glitches"].get("f_low"),
+        glitch_frame=(d["q_padding"], d["q_padding"] + d["frame_length"]))
     gen._tmpdir = tmp
     gen.frame_slice = (int(round(d["q_padding"] * gen.fs)),
                        int(round((d["q_padding"] + d["frame_length"]) * gen.fs)))

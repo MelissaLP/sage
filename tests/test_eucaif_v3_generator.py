@@ -91,3 +91,24 @@ def test_network_population_keeps_only_the_network_detectors(tmp_path):
     cfg["data"]["detectors"] = ["H1", "V1"]
     with pytest.raises(ValueError, match="no rate for"):
         _network_population(cfg, tmp_path)
+
+
+def test_antenna_factors_delays_and_in_frame_glitch_snr(tmp_path):
+    det = pytest.importorskip("pycbc.detector")
+    gen = _generator(tmp_path, seed=2)
+    b = gen.batch(8)
+    pos = (b["y"] == 1).numpy()
+    assert torch.isnan(b["fplus"][~pos]).all() and torch.isfinite(b["delay"][pos]).all()
+    centre = b["gps"].numpy() + 2.0                                              # stored window centre
+    p = {k: b["params"][k].numpy() for k in ("ra", "dec", "polarization")}
+    for i in np.nonzero(pos)[0]:
+        for j, name in enumerate(gen.detectors):
+            d = det.Detector(name)
+            fp, fc = d.antenna_pattern(p["ra"][i], p["dec"][i], p["polarization"][i], centre[i])
+            assert float(b["fplus"][i, j]) == pytest.approx(fp, abs=2e-3)
+            assert float(b["fcross"][i, j]) == pytest.approx(fc, abs=2e-3)
+            assert float(b["delay"][i, j]) == pytest.approx(d.time_delay_from_earth_center(
+                p["ra"][i], p["dec"][i], centre[i]), abs=1e-5)
+    events = [e for ev in b["glitch_events"] for e in ev]
+    assert events and all(0 <= e["frame_fraction"] <= 1 + 1e-9 and e["snr_in_frame"] <= e["snr"] + 1e-9
+                          for e in events)

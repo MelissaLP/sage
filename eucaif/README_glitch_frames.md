@@ -53,8 +53,17 @@ checkout first: the file stores the commit, and warns if there are uncommitted c
 
 HDF5 layout: `x`, `glitch` (n, D, 24576) with D = 1 here, `t` (time from the frame start, negative
 in the left padding), `n_glitches` (n, D), `glitches/*` (one row per glitch: frame, detector, class, time,
-snr and every generator parameter), attributes (classes, detectors, `frame_slice`, the full config
+snr, `snr_in_frame` and `frame_fraction` (SNR inside the frame and share of SNR^2 there; files written after
+v1.2 only) and every generator parameter), attributes (classes, detectors, `frame_slice`, the full config
 text, seed, command, SAGE commit).
+
+To check a file, or look at one example, use `eucaif/inspect_dataset.py` (works on v1, v2 and glitch-frame files):
+
+```bash
+python eucaif/inspect_dataset.py summary FILE          # provenance, size, classes, SNRs, glitch classes
+python eucaif/inspect_dataset.py check FILE            # consistency checks; exit code 1 if one fails
+python eucaif/inspect_dataset.py example FILE 12 --fig ex12.png   # labels, glitches, time series + Q-scan
+```
 
 ## Step 2: train on the fly
 

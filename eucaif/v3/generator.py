@@ -37,7 +37,7 @@ from eucaif.eucaif_v2 import _populations, _prior_with_tc, _register
 from eucaif.v3 import segments as S
 from eucaif.v3.sources import StrainCache
 from eucaif.v3.whitening import make_whitener
-from sage.data.waveform import ConstantProjection, read_from_config
+from sage.data.waveform import ConstantProjection, gmst_from_gps, read_from_config
 from sage.dsp.welch import TorchWelch
 
 APPROXIMANTS = ("IMRPhenomPv2", "IMRPhenomD", "IMRPhenomXAS", "IMRPhenomXHM", "IMRPhenomXP", "IMRPhenomXPHM")
@@ -87,6 +87,7 @@ class EucaifV3:
         self.fs = float(d["sample_rate"])
         self.context = float(d["context_seconds"])
         self.stored = float(d["frame_length"] + 2 * d["q_padding"])
+        self.q_padding, self.frame_length = float(d["q_padding"]), float(d["frame_length"])
         self.stored_offset = (self.context - self.stored) / 2                     # stored window in the context
         self.L = int(round(self.stored * self.fs))
         self.N = int(round(self.context * self.fs))
@@ -212,6 +213,7 @@ class EucaifV3:
         y[self.rng.permutation(n)[: int(round(self.signal_fraction * n))]] = 1
         sig = torch.zeros_like(x)
         snr_det = torch.full((n, D), float("nan"), dtype=torch.float64)
+        fplus, fcross, delay = (torch.full((n, D), float("nan"), dtype=torch.float64) for _ in range(3))
         theta_full = torch.full((n, len(self.cols)), float("nan"), dtype=torch.float64)
         idx = torch.nonzero(y).squeeze(-1)
         if idx.numel():
@@ -227,16 +229,25 @@ class EucaifV3:
             sig[idx] = h
             snr_det[idx] = rho
             theta_full[idx] = theta
+            # the projection's antenna factors and delays (same GPS time and sky position as the signals)
+            pr = self.projection
+            gmst = gmst_from_gps(centre, pr.device, pr.dtype)
+            ra, dec, pol = (theta[:, self.cols[k]].to(device=pr.device, dtype=pr.dtype)
+                            for k in ("ra", "dec", "polarization"))
+            fp, fc = pr.antenna_pattern(ra, dec, pol, gmst)
+            fplus[idx], fcross[idx] = fp.cpu().double(), fc.cpu().double()
+            delay[idx] = pr.time_delay_from_earth_center(ra, dec, gmst).cpu().double()
 
         # glitches in the stored window, at their SNR against this window's PSD (analytic shapes as strain)
         glitch = torch.zeros_like(x)
         events = [[] for _ in range(n)]
         window = (self.stored_offset, self.stored_offset + self.stored)
+        frame = (self.stored_offset + self.q_padding, self.stored_offset + self.q_padding + self.frame_length)
         g = torch.Generator().manual_seed(int(self.rng.integers(2 ** 31)))
         for pop in self.glitches:
             asd_grid = asd.reshape(n * D, -1)
             add, ev = pop.inject(torch.zeros_like(x), asd_grid.reshape(n, D, -1), g, f_low=self.glitch_f_low,
-                                 window=window)
+                                 window=window, frame=frame)
             glitch = glitch + add
             for s, evs in enumerate(ev):                                             # s: example * D + detector
                 for e in evs:
@@ -250,7 +261,7 @@ class EucaifV3:
                                                                 ("glitch", glitch))}
         gps_stored = gps0 + self.stored_offset
         tags = [[self.tags.in_window(det, gs, gs + self.stored) for det in self.detectors] for gs in gps_stored]
-        return dict(out, y=y, snr=snr_det.norm(dim=-1), snr_det=snr_det,
+        return dict(out, y=y, snr=snr_det.norm(dim=-1), snr_det=snr_det, fplus=fplus, fcross=fcross, delay=delay,
                     tc=theta_full[:, self.cols["tc"]] if "tc" in self.cols else None,
                     params={k: theta_full[:, i] for k, i in self.cols.items()},
                     gps=torch.tensor(gps_stored), sources=prov, glitch_events=events, tags=tags,
