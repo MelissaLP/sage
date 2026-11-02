@@ -29,6 +29,8 @@ def test_build_with_stubbed_gwosc(monkeypatch):
     out = S.build(["O3a"], ["H1", "L1"], min_length=32, veto_before=30, veto_after=10, session=object(),
                   log=lambda *a: None)
     assert out["segments"]["O3a"] == [(100, 470), (510, 1000)]
+    # fractional edges (from vetoes) are rounded inward to whole seconds
+    assert S.network_segments([[(0.0, 100.0)]], [(40.5, 50.25)], 10) == [(0.0, 40.0), (51.0, 100.0)]
     assert out["veto"]["n_events"] == 1
     assert out["hours"]["O3a"]["network"] == pytest.approx(860 / 3600)
 

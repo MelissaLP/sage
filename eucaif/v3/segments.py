@@ -110,11 +110,12 @@ def event_times(session=None):
 
 
 def network_segments(per_detector, vetoes, min_length):
-    """Intersection over the detectors, minus vetoes, keeping stretches >= ``min_length`` s."""
+    """Intersection over the detectors, minus vetoes, rounded inward to whole GPS seconds (so cached data sit on
+    one global sample grid), keeping stretches >= ``min_length`` s."""
     seg = None
     for s in per_detector:
         seg = list(s) if seg is None else intersect(seg, s)
-    seg = subtract(seg, vetoes)
+    seg = [(float(math.ceil(a)), float(math.floor(b))) for a, b in subtract(seg, vetoes)]
     return [(a, b) for a, b in seg if b - a >= min_length]
 
 

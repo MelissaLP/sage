@@ -4,6 +4,20 @@
 data:
   detectors: [H1, L1]            # any of H1, L1, V1 (V1: O3 only)
   runs: [O3a, O3b, O4a]          # GWOSC observing runs
+  sample_rate: 2048              # Hz, after resampling (sage.dsp.decimate; power-of-2 ratio to the source rate)
+sources:                         # eucaif/v3/sources.py; tried in this order (the next if one fails)
+  order: [gwosc, frames]
+  gwosc:
+    sample_rate: 16384           # 16384 (same resampling as frames) or 4096 (already downsampled by GWOSC)
+  frames:                        # on a LIGO/Virgo cluster: TimeSeries.get(channel, frametype=...)
+    # EXAMPLES ONLY: set the channel and frame type of the calibration you want on your cluster
+    channels: {H1: H1:GDS-CALIB_STRAIN_CLEAN, L1: L1:GDS-CALIB_STRAIN_CLEAN, V1: V1:Hrec_hoft_16384Hz}
+    frametypes: {H1: H1_HOFT_C00, L1: L1_HOFT_C00, V1: HoftOnline}
+cache:                           # filled once by `python -m eucaif.v3.sources download` (HTCondor: v3/download.sub)
+  directory: v3_cache            # decimated float32 pieces + provenance; put it on shared disk on a cluster
+  chunk_seconds: 4096            # GPS-aligned chunk = one GWOSC file, downloaded once
+  margin_seconds: 0.0            # extra data around each piece for the decimation (>0 costs a 2nd GWOSC file)
+  fetch_missing: false           # training reads only the cache (true: fetch missing pieces on the fly)
 segments:
   min_length: 32.0               # s of contiguous good time a window needs (PSD context + frame); shorter
                                  # stretches are not used
