@@ -1,6 +1,5 @@
 # EuCAIF dataset v3: real detector noise (GWOSC open data, or frames on a LIGO/Virgo cluster) with BBH and
 # glitch injections, for training on the fly. Read by eucaif/v3; instructions in eucaif/v3/README.md.
-# Built in stages: this file holds the sections implemented so far.
 data:
   detectors: [H1, L1]            # any of H1, L1, V1 (V1: O3 only)
   runs: [O3a, O3b, O4a]          # GWOSC observing runs
