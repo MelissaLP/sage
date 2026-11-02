@@ -24,3 +24,11 @@ glitch_tags:                     # labelled real glitches, to tag (not remove) w
     label_column: ml_label
     confidence_column: ml_confidence
     min_confidence: 0.9
+whitening:                       # eucaif/v3/whitening.py; new methods plug in with @register
+  method: fir                    # fir: FIRWhitening (gwpy's whiten) with each window's own ASD
+                                 # fiducial: SAGE main's FD division by a fixed ASD per detector
+  fduration: 4.0                 # fir: s, FIR filter length (drops fduration / 2 at each end)
+  highpass: 15.0                 # Hz
+  output_dtype: float32          # filtering is float64; output stored as float32
+  # fiducial only: fiducial_dir (SAGE main's fiducial_{det}_psd.bin/.json) or asd_file (.npz with detectors,
+  # frequencies, asd), and pad_seconds (edges dropped, default 2)
