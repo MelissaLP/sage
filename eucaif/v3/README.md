@@ -6,6 +6,7 @@ reads it on the fly, never touching the network. Every example keeps the GPS tim
 Everything is set in `eucaif/eucaif_v3.yaml`.
 
 Run from the SAGE repo root with `PYTHONPATH=.` in the `eucaif/environment.yml` environment (gwpy ≥ 4).
+Version: v3.0 (tag `eucaif-dataset-v3.0`).
 
 ![EuCAIF v3 example](../figures/eucaif_v3_example.png)
 

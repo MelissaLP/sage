@@ -145,6 +145,6 @@ Each item reproduces a result discussed with Melissa; the expected numbers are w
   5-100 so quiet glitches are not all buried).
 - Releases: `eucaif-glitch-frames-v1.0` (sine-Gaussian Blip and Tomte, no Koi_Fish);
   `eucaif-glitch-frames-v1.1` (Antiglitch Blip, Tomte and Koi_Fish); v1.2 (current code; tag
-  `eucaif-glitch-frames-v1.2` still to be made): analytic glitches injected as **strain**, as their sources
+  `eucaif-glitch-frames-v1.2`): analytic glitches injected as **strain**, as their sources
   define them, not as whitened shapes (whitened, their power moves to where the detector is most sensitive),
   and whitening as gwpy >= 4 (after the merge of SAGE `main`). Generate stored sets from a clean checkout of the tag.

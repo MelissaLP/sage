@@ -163,7 +163,7 @@ clean checkout of it, so `sage_version` in the file is the tag. Each release reg
 | `eucaif-dataset-v2.0` | GWForge sine-Gaussians for Blip, Tomte, Blip_Low_Frequency; no Koi_Fish |
 | `eucaif-dataset-v2.1` | Antiglitch for Blip, Tomte, Blip_Low_Frequency and Koi_Fish |
 | v2.2 (current code; tag `eucaif-dataset-v2.2` still to be made) | SAGE `main` merged: BBH waveforms from its IMRPhenomPv2 (LAL's time correction, tc and taper conventions) and PyCBC's chirp-distance convention (distances ~1.3% lower, SNRs ~1.3% higher); whitening as gwpy >= 4 (5e-4 from v2.1's gwpy-3 whitening). Glitches and noise as v2.1 apart from the whitening change. Generation ~20% slower. |
-| v2.3 (current code; tag `eucaif-dataset-v2.3` still to be made) | analytic glitches injected as **strain** (as Antiglitch, ArchEnemy and McGAN define them), not as whitened shapes: whitened, their power moves to where the detector is most sensitive (an Antiglitch Blip with f0 = 12 Hz now peaks near 60 Hz, as in Antiglitch's fits). Same classes, times and SNRs; BBH and noise as v2.2. |
+| v2.3 (current code; tag `eucaif-dataset-v2.3`) | analytic glitches injected as **strain** (as Antiglitch, ArchEnemy and McGAN define them), not as whitened shapes: whitened, their power moves to where the detector is most sensitive (an Antiglitch Blip with f0 = 12 Hz now peaks near 60 Hz, as in Antiglitch's fits). Same classes, times and SNRs; BBH and noise as v2.2. |
 
 Same seeds therefore give different BBH examples in v2.1 and v2.2, and different glitch shapes (same
 classes, times and SNRs) in v2.2 and v2.3; noise-only examples without glitches differ only by the whitening change.
