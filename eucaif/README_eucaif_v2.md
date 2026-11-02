@@ -121,6 +121,12 @@ for epoch in range(n_epochs):
 
 The Q-scan and tile settings are in the YAML's `qtransform` section.
 
+![EuCAIF v2 model inputs](figures/eucaif_v2_model_inputs.png)
+
+The `timeseries` and `qscan` inputs of a noise-only and a BBH example (network SNR 20.5), H1 and L1, with the
+injected BBH (blue) and glitches (orange) whitened alone on the time series. Made by
+`python eucaif/example_model_inputs.py v2 --out eucaif/figures/eucaif_v2_model_inputs.png`.
+
 - Each item also has `glitch` and `signal` (whitened, per detector: denoising / glitch-removal
   targets), `n_glitches` (B, 2), `snr` and `tc` (NaN for noise-only examples).
 - Batch *i* of epoch *e* is fully determined by `(seed, e, i)` (noise, glitches, BBH parameters and

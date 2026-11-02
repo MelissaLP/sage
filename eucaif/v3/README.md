@@ -191,6 +191,13 @@ for epoch in range(10):
 | `qscan` (`qt.qscan(x)`) | (B, D, 256, 256) | gwpy-exact Q-scan image of the frame (time × frequency) |
 | `tiles` (`qt.tiles(x)`) | {5.7: (B, D, 22, 8192), 45.3: (B, D, 183, 1024)} complex | invertible Q-tiles, one entry per Q |
 
+![EuCAIF v3 model inputs](../figures/eucaif_v3_model_inputs.png)
+
+The `timeseries` and `qscan` inputs of a noise-only and a BBH example (network SNR 19.9) in real H1 O3a data,
+with the injected BBH (blue) and glitches (orange) whitened alone. The noise-only example also holds an injected
+low-frequency glitch (the band near 30 Hz). Made from a partial H1 cache by
+`python eucaif/example_model_inputs.py v3 --seed 4 --detectors H1 --out eucaif/figures/eucaif_v3_model_inputs.png`.
+
 - **No network access:** the loader reads only the cache.
 - **Partial downloads work:** windows are drawn only where the cache has data for every detector; the log says
   how many hours that is.

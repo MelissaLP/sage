@@ -26,6 +26,15 @@ The source population and window follow the ggwd / ML-challenge setup; see
 | Whitening | 4 s FIR inverse-spectrum truncation, equivalent to gwpy's `TimeSeries.whiten` (gwpy >= 4; releases v1.0, v2.0 and v2.1 used gwpy 3's, about 5e-4 apart) |
 | Merger time | `tc` uniform in [0.5, 1.5] s from the start of the 2 s window |
 
+![EuCAIF v1 model inputs](figures/eucaif_v1_model_inputs.png)
+
+A noise-only and a BBH example (network SNR 19.6), H1 and L1. Each pair of panels shows the stored 2 s
+whitened time series (with the injected BBH alone in blue) and its Q-scan. The files hold only the time
+series; a Q-scan can be computed from them with `eucaif.eucaif_v2.QTransforms` (see `README_eucaif_v2.md`).
+v1 has no extra data around the frame, so the Q-scan's first and last ~0.1 s are affected by the
+transform's wrap-around; v2 and v3 store 1 s more on each side for this. Made by
+`python eucaif/example_model_inputs.py v1 --out eucaif/figures/eucaif_v1_model_inputs.png`.
+
 ## How an example is made
 
 1. **Noise.** Each example gets its own independent noise realisation,
