@@ -25,6 +25,33 @@ with h5py.File("virgo_glitches.h5") as h:
     labels = h["metadata/label"].asstr()[:]    # strings: .asstr()
 ```
 
+## Q-transform images
+
+Gravity Spy-style images of every glitch in 0.5, 1, 2 and 4 s windows, in one call (multi-window `outseg`,
+idea from Guillem). The glitch is at the centre of each 32 s series, so the windows are centred there:
+
+```python
+import h5py, torch
+from sage.dsp.qtransform import QTransform
+
+with h5py.File("virgo_glitches.h5") as h:
+    x = torch.tensor(h["whitened"][:64])       # 64 glitches, (64, 131072)
+    fs = float(h.attrs["sample_rate"])
+c = x.shape[-1] / fs / 2                        # the glitch: 16 s
+windows = [(c - d / 2, c + d / 2) for d in (0.5, 1.0, 2.0, 4.0)]
+qt = QTransform(fs, x.shape[-1], outseg=windows, tbin=256, logf=True, fbin=256, frange=(10, 1024))
+img = qt(x, gps=c)                              # (64, 4, 256, 256): window, time, frequency
+```
+
+- `tbin` / `fbin` set the image size (times per window, frequencies). The windows don't need to be multiples of
+  each other.
+- `gps=c` picks the Q-plane from the loudest tile within ±0.25 s of the glitch (`search`, as gwpy), the same Q
+  for all four windows. Each window is exactly what a single-window `QTransform(outseg=...)` gives, but the
+  transform and the Q choice are computed once (about 3× faster than four calls).
+- Building `qt` takes a few seconds (the tiling of 32 s); build it once and reuse it. On a GPU:
+  `qt = qt.to("cuda")` and `x = x.cuda()`.
+- `qt.times[w]` and `qt.frequencies` give each image's axes, in s from the start of the 32 s and in Hz.
+
 ## Whitening
 
 For each glitch:
