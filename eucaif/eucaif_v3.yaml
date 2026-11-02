@@ -5,6 +5,11 @@ data:
   detectors: [H1, L1]            # any of H1, L1, V1 (V1: O3 only)
   runs: [O3a, O3b, O4a]          # GWOSC observing runs
   sample_rate: 2048              # Hz, after resampling (sage.dsp.decimate; power-of-2 ratio to the source rate)
+  context_seconds: 32            # s of real strain per example; its PSD is estimated from it
+  frame_length: 2.0              # s, the network's input window (as v1/v2)
+  q_padding: 1.0                 # s stored on each side of the frame (Q-transforms); stored window = 4 s
+  signal_padding: 4.0            # s on each side of the stored window for the BBH (12 s grid, as v2)
+  signal_low_frequency_cutoff: 20.0
 sources:                         # eucaif/v3/sources.py; tried in this order (the next if one fails)
   order: [gwosc, frames]
   gwosc:
@@ -15,7 +20,8 @@ sources:                         # eucaif/v3/sources.py; tried in this order (th
     channels: {H1: H1:GDS-CALIB_STRAIN_CLEAN, L1: L1:GDS-CALIB_STRAIN_CLEAN, V1: V1:Hrec_hoft_16384Hz}
     frametypes: {H1: H1_HOFT_C00, L1: L1_HOFT_C00, V1: HoftOnline}
 cache:                           # filled once by `python -m eucaif.v3.sources download` (HTCondor: v3/download.sub)
-  directory: v3_cache            # decimated float32 pieces + provenance; put it on shared disk on a cluster
+  directory: v3_cache            # decimated float32 pieces + provenance; relative to this file's folder (or
+                                 # absolute); put it on shared disk on a cluster
   chunk_seconds: 4096            # GPS-aligned chunk = one GWOSC file, downloaded once
   margin_seconds: 0.0            # extra data around each piece for the decimation (>0 costs a 2nd GWOSC file)
   fetch_missing: false           # training reads only the cache (true: fetch missing pieces on the fly)
@@ -32,13 +38,13 @@ split:
   block_seconds: 4096            # gps_blocks only
   fractions: {train: 0.8, validation: 0.1, test: 0.1}
   seed: 0
-glitch_tags:                     # labelled real glitches, to tag (not remove) windows; empty: no tags
-  - path: gravityspy/H1_O3a.csv  # Gravity Spy, Zenodo 5649212 (H1/L1, O3a/O3b)
-    detector_column: ifo
-    gps_column: event_time
-    label_column: ml_label
-    confidence_column: ml_confidence
-    min_confidence: 0.9
+glitch_tags: []                  # labelled real glitches, to tag (not remove) windows; empty: no tags. E.g.:
+  # - path: gravityspy/H1_O3a.csv  # Gravity Spy, Zenodo 5649212 (H1/L1, O3a/O3b), relative to this file
+  #   detector_column: ifo
+  #   gps_column: event_time
+  #   label_column: ml_label
+  #   confidence_column: ml_confidence
+  #   min_confidence: 0.9
 whitening:                       # eucaif/v3/whitening.py; new methods plug in with @register
   method: fir                    # fir: FIRWhitening (gwpy's whiten) with each window's own ASD
                                  # fiducial: SAGE main's FD division by a fixed ASD per detector
@@ -47,3 +53,22 @@ whitening:                       # eucaif/v3/whitening.py; new methods plug in w
   output_dtype: float32          # filtering is float64; output stored as float32
   # fiducial only: fiducial_dir (SAGE main's fiducial_{det}_psd.bin/.json) or asd_file (.npz with detectors,
   # frequencies, asd), and pad_seconds (edges dropped, default 2)
+psd:                             # each window's PSD, for the whitening and the injections' SNRs
+  segment_seconds: 4.0           # median Welch (TorchWelch), Hann, 50% overlap
+  exclude_centre: false          # true: from the context's two sides only, averaged (as ggwd FM production)
+signal:
+  prior: sage_eucaif_waveform.yaml   # v1's BBH prior (relative to this file); tc replaced by q_padding + tc_in_frame
+  approximant: IMRPhenomPv2      # SAGE waveforms: IMRPhenomPv2 (default), IMRPhenomD, IMRPhenomXAS, IMRPhenomXHM,
+                                 # IMRPhenomXP, IMRPhenomXPHM (the prior must provide the parameters they need)
+  tc_in_frame: [0.5, 1.5]        # s, geocentric merger time from the start of the frame
+  snr_range: null                # null: physical distances; [MIN, MAX]: network SNR against this window's PSD
+glitches:                        # as v2.3: analytic shapes (strain), Gravity Spy O3a class rates per detector
+  population: sage_analytic_glitches.yaml
+  probability: 0.5
+  per_window: [1, 3]
+  f_low: 15.0
+nonphysical_glitches:            # as v2: one McGAN shape per (example, detector), Blip-like SNRs; probability 0: off
+  classes: [Ringdown, WhiteNoiseBurst, GaussianBlip]
+  probability: 1.0
+  per_window: [1, 1]
+  snr_like: Blip

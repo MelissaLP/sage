@@ -211,13 +211,17 @@ class WindowSampler:
         self.cum = np.cumsum(self.room + 1e-9)
         self.hours = total(seg) / 3600
 
-    def sample(self, n, rng):
-        """``n`` GPS start times (float64), uniform over all available start positions."""
+    def sample(self, n, rng, return_segments=False):
+        """``n`` GPS start times (float64), uniform over all available start positions; with ``return_segments``
+        also the (start, end) of the segment of each."""
         u = rng.random(n) * self.cum[-1]
         i = np.searchsorted(self.cum, u, side="right")
         i = np.minimum(i, len(self.cum) - 1)
         offset = u - (self.cum[i] - self.room[i] - 1e-9)
-        return self.starts[i] + np.clip(offset, 0.0, self.room[i])
+        t = self.starts[i] + np.clip(offset, 0.0, self.room[i])
+        if return_segments:
+            return t, [(float(self.starts[k]), float(self.starts[k] + self.room[k] + self.length)) for k in i]
+        return t
 
 
 # -- glitch tags ----------------------------------------------------------------------------------------

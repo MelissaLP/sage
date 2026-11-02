@@ -127,8 +127,12 @@ class StrainCache:
 
     @classmethod
     def from_config(cls, cfg, log=print):
+        """From the v3 YAML; a relative ``cache.directory`` is relative to the YAML's folder (``cfg["_dir"]``)."""
         c = cfg["cache"]
-        return cls(c["directory"], make_sources(cfg["sources"]), sample_rate=cfg["data"]["sample_rate"],
+        directory = Path(c["directory"])
+        if not directory.is_absolute() and cfg.get("_dir") is not None:
+            directory = Path(cfg["_dir"]) / directory
+        return cls(directory, make_sources(cfg["sources"]), sample_rate=cfg["data"]["sample_rate"],
                    chunk_seconds=c.get("chunk_seconds", 4096), margin_seconds=c.get("margin_seconds", 0.0),
                    fetch_missing=c.get("fetch_missing", False), log=log)
 
@@ -253,7 +257,8 @@ def main(argv=None):
     args = p.parse_args(argv)
     cfg_path = Path(args.config)
     cfg = yaml.safe_load(cfg_path.read_text())
-    seg = S.load(cfg_path.parent / cfg["segments"]["file"])["segments"]
+    cfg["_dir"] = cfg_path.resolve().parent
+    seg = S.load(cfg["_dir"] / cfg["segments"]["file"])["segments"]
     cache = StrainCache.from_config(cfg)
     work = plan(seg, cache.chunk)
     dets = args.detectors or cfg["data"]["detectors"]
