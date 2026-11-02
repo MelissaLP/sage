@@ -45,6 +45,15 @@ glitch_tags: []                  # labelled real glitches, to tag (not remove) w
   #   label_column: ml_label
   #   confidence_column: ml_confidence
   #   min_confidence: 0.9
+observed_glitches:               # examples centred on tagged real glitches (needs glitch_tags); fraction 0: off
+  fraction: 0.0                  # share of examples (the others are drawn uniformly in time)
+  time_in_frame: [0.5, 1.5]      # s from the frame start where the glitch's GPS time lands
+  min_confidence: 0.9            # e.g. Gravity Spy ml_confidence
+  classes: null                  # labels to use (null: all but exclude_labels)
+  exclude_labels: [None_of_the_Above, No_Glitch]
+  balance_classes: false         # true: every label equally often; false: as often as in the tables
+  inject_glitches: false         # also inject analytic glitches into these examples
+                                 # (consider psd.exclude_centre: true, so the glitch does not bias its own PSD)
 whitening:                       # eucaif/v3/whitening.py; new methods plug in with @register
   method: fir                    # fir: FIRWhitening (gwpy's whiten) with each window's own ASD
                                  # fiducial: SAGE main's FD division by a fixed ASD per detector

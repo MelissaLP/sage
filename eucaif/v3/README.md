@@ -52,7 +52,7 @@ flowchart TD
     subgraph fly["Every batch: DataLoader workers (CPU, no network)"]
         direction TB
         SPLIT["split: gps_blocks or random"]
-        WIN["draw a 32 s window per example<br/>where every detector is cached"]
+        WIN["draw a 32 s window per example where every detector is cached:<br/>uniform, or centred on a tagged real glitch"]
         PSD["PSD from the window itself<br/>(median Welch)"]
         BBH["BBH: SAGE waveform, sidereal time<br/>of the window's GPS · signal.fraction"]
         GL["glitches: analytic + McGAN<br/>at their SNR · probability or null"]
@@ -162,6 +162,34 @@ To add a method, subclass `Whitener` in `eucaif/v3/whitening.py`, set `name`, im
 - **Real glitches** in the background are not removed. If `glitch_tags` points to Gravity Spy tables (Zenodo
   5649212, H1/L1), each window lists the labelled glitches it holds. A detector without a table gives `None`
   (unknown).
+- **Observed real glitches:** with `observed_glitches.fraction > 0`, that share of examples is centred on a
+  tagged real glitch instead of a uniform time. The glitch lands at `time_in_frame` in the 2 s frame, filtered
+  by confidence and label, optionally one label as often as another. Their label (`observed`) is Gravity Spy's,
+  and there is no `glitch` target: the real glitch is part of the noise. Analytic glitches are not added to them
+  unless `inject_glitches: true`; a BBH is added as for any example (`y`). Set `psd.exclude_centre: true` with
+  this, so the glitch does not bias its own PSD.
+
+## Recipes and matched pairs
+
+Every example can be regenerated exactly, and compared with itself without a component.
+
+- **Recipes.** Batch randomness is fixed by (seed, batch key); the loader uses (epoch, batch index). Each example
+  has a `recipe` (config hash, seed, key, its position, the batch's window GPS times), and
+  `EucaifV3.replay(recipe)` rebuilds it bit for bit. Windows are taken by GPS, so a cache that has grown since
+  doesn't matter.
+- **Matched pairs.** `without(b, "glitch")` is the same example without its injected glitches, and
+  `without(b, "signal")` without its BBH: same noise, same PSD, same everything else. It is exact because the PSD
+  comes from the strain before any injection, and the whitening is linear. A test checks it against regenerating
+  with glitches or BBHs switched off.
+
+```python
+from eucaif.v3.generator import EucaifV3, load_config, without
+
+gen = EucaifV3(load_config("eucaif/eucaif_v3.yaml"), split="test", seed=0)
+b = gen.batch(64, key=(0, 0))
+clean = without(b, "glitch")              # pairs: model(b["x"]) vs model(clean) isolates the glitches' effect
+again = gen.replay(b["recipes"][17])      # example 17, regenerated
+```
 
 ## Training on the fly
 
@@ -201,8 +229,8 @@ low-frequency glitch (the band near 30 Hz). Made from a partial H1 cache by
 - **No network access:** the loader reads only the cache.
 - **Partial downloads work:** windows are drawn only where the cache has data for every detector; the log says
   how many hours that is.
-- **Reproducible:** each worker is seeded by (seed, epoch, worker), so an epoch can be repeated exactly and
-  workers draw different windows.
+- **Reproducible:** batch *i* of epoch *e* is fixed by (seed, *e*, *i*), whatever the number of workers, and
+  every example can be regenerated from its recipe (see "Recipes and matched pairs").
 
 A batch (B examples, D detectors, L = 8192 samples = 4 s at 2048 Hz):
 
@@ -219,6 +247,8 @@ A batch (B examples, D detectors, L = 8192 samples = 4 s at 2048 Hz):
 | `fplus`, `fcross`, `delay` | (B, D) | the BBH's antenna factors and arrival delay from the geocentre (s), at the window's GPS time (NaN without one) |
 | `glitch_events` | B lists | injected glitches: class, SNR, `snr_in_frame` and `frame_fraction` (SNR inside the 2 s frame and the share of SNR² there), detector, time, GPS |
 | `tags` | B × D | labelled real glitches in the window (`None`: no table) |
+| `observed` | B | the tagged real glitch an example is centred on (detector, GPS, label, confidence, time), else `None` |
+| `recipes` | B | what `EucaifV3.replay` needs to regenerate each example |
 | `asd_frequencies`, `asd` | (F,), (B, D, F) | the ASD used for whitening and SNRs |
 
 The 2 s frame is `x[..., 2048:6144]`. The extra 1 s on each side is for Q-transforms.

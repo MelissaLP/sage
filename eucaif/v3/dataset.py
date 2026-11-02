@@ -14,13 +14,13 @@ Windows are drawn where the cache has data for every detector (a partial downloa
 random`` every split draws over all the data, as ggwd FM production; with ``gps_blocks`` each split only from its
 own GPS blocks. Every batch keeps the GPS time and source of its windows.
 
-Each DataLoader worker builds its own ``EucaifV3`` seeded by (seed, epoch, worker), so workers draw different
-windows and an epoch is reproducible; batches are built whole by the generator (DataLoader ``batch_size=None``).
+Batch ``i`` of epoch ``e`` is fixed by (seed, e, i), whatever the number of workers (each worker makes every
+``num_workers``-th batch); its ``recipes`` regenerate any example with ``EucaifV3.replay``. Batches are built whole
+by the generator (DataLoader ``batch_size=None``).
 """
 
 import copy
 
-import numpy as np
 from torch.utils.data import DataLoader, IterableDataset, get_worker_info
 
 from eucaif.v3.generator import EucaifV3, load_config
@@ -51,14 +51,12 @@ class EucaifV3Stream(IterableDataset):
     def __iter__(self):
         info = get_worker_info()
         worker, workers = (info.id, info.num_workers) if info else (0, 1)
-        seed = int(np.random.SeedSequence([self.seed, self.epoch, worker]).generate_state(1)[0])
-        gen = EucaifV3(self.cfg, split=self.split, seed=seed, batch_size=self.batch_size, device=self.device,
+        gen = EucaifV3(self.cfg, split=self.split, seed=self.seed, batch_size=self.batch_size, device=self.device,
                        log=self.log if worker == 0 else (lambda *a: None))
-        if self.batches is None:
-            while True:
-                yield gen.batch()
-        for _ in range(self.batches // workers + (worker < self.batches % workers)):
-            yield gen.batch()
+        i = worker                                                 # global batch index: same data for any workers
+        while self.batches is None or i < self.batches:
+            yield gen.batch(key=(self.epoch, i))                   # its recipes replay with EucaifV3.replay
+            i += workers
 
 
 def make_loader(config, split="train", batch_size=64, num_workers=0, seed=0, batches=None, overrides=None,

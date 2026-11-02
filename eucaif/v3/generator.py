@@ -26,6 +26,8 @@ Real data are not clean: the background may hold real glitches (``tags`` from Gr
 labelled ones; a detector without a table is unknown) and only the *injected* components have exact targets.
 """
 
+import hashlib
+import json
 import tempfile
 from pathlib import Path
 
@@ -134,8 +136,51 @@ class EucaifV3:
         self.glitches = _populations(v2) if cfg.get("glitches") else []
         self.glitch_f_low = (cfg.get("glitches") or {}).get("f_low")
         self.batch_size = int(batch_size)
-        self.rng = np.random.default_rng(seed)
-        self.seed = seed
+        self.seed = int(seed)
+        self._count = 0
+        self.config_hash = hashlib.sha256(json.dumps({k: v for k, v in cfg.items() if not k.startswith("_")},
+                                                     sort_keys=True, default=str).encode()).hexdigest()[:12]
+        self._setup_observed(cfg.get("observed_glitches") or {})
+
+    def _setup_observed(self, o):
+        """The pool of tagged real glitches whose window fits in this split's (cached) segments."""
+        self.obs_fraction = float(o.get("fraction", 0.0))
+        self.obs_inject = bool(o.get("inject_glitches", False))
+        self.obs_balance = bool(o.get("balance_classes", False))
+        self.obs_time = tuple(float(v) for v in o.get("time_in_frame", [0.5, 1.5]))
+        if self.obs_fraction <= 0:
+            return
+        if not self.tags.tables:
+            raise ValueError("observed_glitches needs glitch_tags (e.g. Gravity Spy tables)")
+        skip = set(o.get("exclude_labels", ["None_of_the_Above", "No_Glitch"]))
+        keep = set(o["classes"]) if o.get("classes") else None
+        min_conf = o.get("min_confidence")
+        segs = np.array(sorted(self.split_segments), dtype=np.float64).reshape(-1, 2)
+        off = self.stored_offset + self.q_padding                               # frame start in the context
+        det_i, gps, labels, conf = [], [], [], []
+        for j, det in enumerate(self.detectors):
+            if det not in self.tags.tables:
+                continue
+            t, lab, c = self.tags.tables[det]
+            lab = np.asarray(lab)
+            ok = ~np.isin(lab, list(skip))
+            if keep is not None:
+                ok &= np.isin(lab, list(keep))
+            if min_conf is not None:
+                ok &= c >= float(min_conf)
+            first = t - (off + self.obs_time[1])                                # earliest context start
+            last = t - (off + self.obs_time[0]) + self.context                  # latest context end
+            k = np.searchsorted(segs[:, 0], first, side="right") - 1
+            ok &= (k >= 0) & (segs[np.maximum(k, 0), 1] >= last)
+            det_i += [j] * int(ok.sum())
+            gps += t[ok].tolist()
+            labels += lab[ok].tolist()
+            conf += c[ok].tolist()
+        if not gps:
+            raise ValueError("observed_glitches: no tagged glitch fits in this split's (cached) segments")
+        self.obs_pool = dict(det=np.array(det_i), gps=np.array(gps), label=np.array(labels), conf=np.array(conf))
+        counts = ", ".join(f"{k} {v}" for k, v in zip(*np.unique(labels, return_counts=True)))
+        self.log(f"observed glitches: {len(gps)} usable ({counts})")
 
     # -- pieces ----------------------------------------------------------------------------------------
 
@@ -186,11 +231,53 @@ class EucaifV3:
         rho2 = 4 * (fs / n) * torch.where(m, H.abs() ** 2 / torch.where(p > 0, p, torch.ones_like(p)), 0).sum(-1)
         return rho2.sqrt()
 
+    def _draw_observed(self, n, rng):
+        """Examples centred on tagged real glitches: {position: (pool index, time in frame)}."""
+        m = int(round(self.obs_fraction * n))
+        if m == 0:
+            return {}
+        pos = rng.choice(n, size=m, replace=False)
+        if self.obs_balance:                                       # a label first, then one of its glitches
+            labels = np.unique(self.obs_pool["label"])
+            pick = [rng.choice(np.nonzero(self.obs_pool["label"] == lab)[0]) for lab in rng.choice(labels, m)]
+        else:
+            pick = rng.integers(len(self.obs_pool["gps"]), size=m)
+        u = rng.uniform(*self.obs_time, size=m)
+        return {int(p): (int(k), float(t)) for p, k, t in zip(pos, pick, u)}
+
+    def _segment_of(self, start):
+        if not hasattr(self, "_seg_array"):
+            self._seg_array = np.array(sorted(self.split_segments), dtype=np.float64).reshape(-1, 2)
+        k = np.searchsorted(self._seg_array[:, 0], start + 1e-6, side="right") - 1
+        if k >= 0 and start + self.context <= self._seg_array[k, 1] + 1e-6:
+            return tuple(float(v) for v in self._seg_array[k])
+        raise ValueError(f"no segment of this split holds a {self.context} s window at GPS {start}")
+
     # -- a batch ---------------------------------------------------------------------------------------
 
-    def batch(self, n=None):
+    def batch(self, n=None, key=None, starts=None):
+        """``n`` examples. ``key``: ints naming the batch, which fix all its randomness with the generator's seed
+        (default: a counter); ``starts``: the context GPS starts to use instead of drawing windows (``replay``)."""
         n = int(n or self.batch_size)
-        starts, segs = self.sampler.sample(n, self.rng, return_segments=True)
+        if key is None:
+            key, self._count = (self._count,), self._count + 1
+        key = tuple(int(k) for k in key)
+        seq = np.random.SeedSequence([self.seed, *key])
+        rng_win, rng_inj = (np.random.default_rng(q) for q in seq.spawn(2))
+        if self.signal_fraction > 0:
+            self.param_sampler.generator.manual_seed(int(seq.generate_state(1)[0]))
+        observed = self._draw_observed(n, rng_win)
+        drawn, segs = self.sampler.sample(n, rng_win, return_segments=True)
+        segs = list(segs)
+        if starts is None:
+            starts = drawn
+            off = self.stored_offset + self.q_padding
+            for p, (k, u) in observed.items():
+                starts[p] = self.obs_pool["gps"][k] - (off + u)
+                segs[p] = self._segment_of(starts[p])
+        else:
+            starts = np.asarray(starts, dtype=np.float64)
+            segs = [self._segment_of(t) for t in starts]
         D = len(self.detectors)
         x = np.zeros((n, D, self.N))
         gps0, prov = np.zeros(n), []
@@ -210,7 +297,7 @@ class EucaifV3:
 
         # BBHs in signal.fraction of the examples
         y = torch.zeros(n, dtype=torch.long)
-        y[self.rng.permutation(n)[: int(round(self.signal_fraction * n))]] = 1
+        y[rng_inj.permutation(n)[: int(round(self.signal_fraction * n))]] = 1
         sig = torch.zeros_like(x)
         snr_det = torch.full((n, D), float("nan"), dtype=torch.float64)
         fplus, fcross, delay = (torch.full((n, D), float("nan"), dtype=torch.float64) for _ in range(3))
@@ -221,7 +308,7 @@ class EucaifV3:
             h, theta = self._signals(centre)
             rho = self._snr(h, f_psd.numpy(), psd[idx], self.fs, self.f_low_signal)
             if self.snr_range is not None:
-                target = torch.tensor(self.rng.uniform(*self.snr_range, size=idx.numel()))
+                target = torch.tensor(rng_inj.uniform(*self.snr_range, size=idx.numel()))
                 scale = target / rho.norm(dim=-1)
                 h = h * scale[:, None, None]
                 theta[:, self.cols["distance"]] = theta[:, self.cols["distance"]] / scale
@@ -243,7 +330,7 @@ class EucaifV3:
         events = [[] for _ in range(n)]
         window = (self.stored_offset, self.stored_offset + self.stored)
         frame = (self.stored_offset + self.q_padding, self.stored_offset + self.q_padding + self.frame_length)
-        g = torch.Generator().manual_seed(int(self.rng.integers(2 ** 31)))
+        g = torch.Generator().manual_seed(int(rng_inj.integers(2 ** 31)))
         for pop in self.glitches:
             asd_grid = asd.reshape(n * D, -1)
             add, ev = pop.inject(torch.zeros_like(x), asd_grid.reshape(n, D, -1), g, f_low=self.glitch_f_low,
@@ -253,6 +340,10 @@ class EucaifV3:
                 for e in evs:
                     events[s // D].append(dict(e, detector=self.detectors[s % D], glitch=None,
                                                gps=float(gps0[s // D] + e["time"])))
+        if observed and not self.obs_inject:                       # the real glitch alone in those examples
+            for p in observed:
+                glitch[p] = 0
+                events[p] = []
 
         # whiten the sum and the injected components with this window's ASD; crop the stored window
         a = int(round(self.stored_offset * self.fs)) - self.whitener.pad
@@ -261,11 +352,54 @@ class EucaifV3:
                                                                 ("glitch", glitch))}
         gps_stored = gps0 + self.stored_offset
         tags = [[self.tags.in_window(det, gs, gs + self.stored) for det in self.detectors] for gs in gps_stored]
+        obs = [None] * n
+        for p, (k, u) in observed.items():
+            P = self.obs_pool
+            obs[p] = dict(detector=self.detectors[P["det"][k]], gps=float(P["gps"][k]), label=str(P["label"][k]),
+                          confidence=float(P["conf"][k]), time=float(P["gps"][k] - gps_stored[p]))
+        recipe = dict(config=self.config_hash, seed=self.seed, key=list(key), n=n, context_gps=gps0.tolist())
+        recipes = [dict(recipe, position=i) for i in range(n)]
         return dict(out, y=y, snr=snr_det.norm(dim=-1), snr_det=snr_det, fplus=fplus, fcross=fcross, delay=delay,
+                    observed=obs, recipes=recipes,
                     tc=theta_full[:, self.cols["tc"]] if "tc" in self.cols else None,
                     params={k: theta_full[:, i] for k, i in self.cols.items()},
                     gps=torch.tensor(gps_stored), sources=prov, glitch_events=events, tags=tags,
                     asd_frequencies=f_psd, asd=asd.float())
+
+    def replay(self, recipe):
+        """The example of ``recipe`` (from a batch's ``recipes``), regenerated exactly: same windows (by GPS, so a
+        cache that has grown since does not matter), injections and whitening. Needs the same config and seed."""
+        if recipe["config"] != self.config_hash or recipe["seed"] != self.seed:
+            raise ValueError("this recipe was made with another config or seed")
+        b = self.batch(recipe["n"], key=recipe["key"], starts=recipe["context_gps"])
+        return take(b, recipe["position"])
+
+
+def take(batch, i):
+    """Example ``i`` of a batch, as a batch of one (tensors keep a leading axis of 1)."""
+    out = {}
+    for k, v in batch.items():
+        if torch.is_tensor(v) and v.dim() and v.shape[0] == len(batch["y"]):
+            out[k] = v[i:i + 1]
+        elif isinstance(v, list) and len(v) == len(batch["y"]):
+            out[k] = v[i:i + 1]
+        elif isinstance(v, dict):
+            out[k] = {kk: vv[i:i + 1] for kk, vv in v.items()}
+        else:
+            out[k] = v
+    return out
+
+
+def without(batch, *components):
+    """Matched counterparts of a batch's inputs: ``x`` with injected ``"signal"`` and/or ``"glitch"`` removed.
+    Exact: the PSD comes from the strain before any injection and the whitening is linear, so this is the example
+    the generator makes without those components (same noise, same everything else)."""
+    x = batch["x"]
+    for c in components:
+        if c not in ("signal", "glitch"):
+            raise ValueError(f"components are 'signal' and 'glitch', got {c!r}")
+        x = x - batch[c]
+    return x
 
 
 def load_config(path):

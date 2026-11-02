@@ -9,7 +9,7 @@ import torch
 
 from eucaif.v3 import segments as S
 from eucaif.v3 import sources as SRC
-from eucaif.v3.generator import EucaifV3, load_config
+from eucaif.v3.generator import EucaifV3, load_config, without
 
 FS = 2048.0
 SEG = (1_240_000_000.0, 1_240_000_600.0)
@@ -42,7 +42,7 @@ def _generator(tmp_path, seed=0, **changes):
     cfg["cache"] = dict(directory=str(tmp_path / "cache"), chunk_seconds=128, fetch_missing=True)
     cfg["split"] = dict(mode="random")
     for k, v in changes.items():
-        cfg[k] = dict(cfg[k], **v)
+        cfg[k] = v if v is None or isinstance(v, list) else dict(cfg.get(k) or {}, **v)
     gen = EucaifV3(cfg, split="train", seed=seed, batch_size=8, log=lambda *a: None)
     gen.cache.sources = [ColouredNoise()]
     return gen
@@ -112,3 +112,49 @@ def test_antenna_factors_delays_and_in_frame_glitch_snr(tmp_path):
     events = [e for ev in b["glitch_events"] for e in ev]
     assert events and all(0 <= e["frame_fraction"] <= 1 + 1e-9 and e["snr_in_frame"] <= e["snr"] + 1e-9
                           for e in events)
+
+
+def test_replay_regenerates_an_example_exactly(tmp_path):
+    gen = _generator(tmp_path, seed=5)
+    b = gen.batch(8, key=(3, 1))
+    for g in (gen, _generator(tmp_path, seed=5)):                                # also a fresh generator
+        ex = g.replay(b["recipes"][5])
+        torch.testing.assert_close(ex["x"], b["x"][5:6], rtol=0, atol=0)
+        assert ex["glitch_events"][0] == b["glitch_events"][5] and float(ex["gps"]) == float(b["gps"][5])
+    assert not torch.equal(gen.batch(8, key=(3, 2))["x"], b["x"])                 # another key, other data
+    with pytest.raises(ValueError, match="another config or seed"):
+        _generator(tmp_path, seed=6).replay(b["recipes"][0])
+
+
+def test_matched_pairs_are_the_example_without_the_component(tmp_path):
+    b = _generator(tmp_path, seed=7).batch(8, key=(0, 0))
+    off = _generator(tmp_path, seed=7, glitches=None).batch(8, key=(0, 0))          # same key, glitches off
+    torch.testing.assert_close(off["y"], b["y"])
+    torch.testing.assert_close(off["x"], without(b, "glitch"), rtol=0, atol=1e-4)
+    noise = _generator(tmp_path, seed=7, glitches=None, signal=dict(fraction=0.0)).batch(8, key=(0, 0))
+    pos = b["y"] == 1                                                              # noise-only twins of the BBHs
+    torch.testing.assert_close(noise["x"][pos], without(b, "glitch", "signal")[pos], rtol=0, atol=1e-4)
+
+
+def test_observed_glitches_centre_windows_on_tagged_glitches(tmp_path):
+    import pandas as pd
+    t0 = SEG[0]
+    pd.DataFrame(dict(ifo=["H1", "H1", "H1", "H1", "L1"], ml_label=["Blip", "Blip", "None_of_the_Above", "Koi_Fish",
+                                                                    "Tomte"],
+                      event_time=[t0 + 100.25, t0 + 300.5, t0 + 400.0, t0 + 500.0, t0 + 10.0],   # Tomte: too early
+                      ml_confidence=[0.95, 0.97, 0.99, 0.5, 0.99])).to_csv(tmp_path / "gs.csv", index=False)
+    tags = [dict(path=str(tmp_path / "gs.csv"), detector_column="ifo", gps_column="event_time",
+                 label_column="ml_label", confidence_column="ml_confidence")]
+    gen = _generator(tmp_path, seed=8, glitch_tags=tags,
+                     observed_glitches=dict(fraction=0.5, min_confidence=0.9, time_in_frame=[0.5, 1.5]))
+    assert sorted(gen.obs_pool["gps"]) == [t0 + 100.25, t0 + 300.5]                 # labels, confidence, fit
+    b = gen.batch(8)
+    obs = [i for i, o in enumerate(b["observed"]) if o is not None]
+    assert len(obs) == 4
+    for i in obs:
+        o = b["observed"][i]
+        assert o["label"] == "Blip" and o["detector"] == "H1" and 1.5 - 1e-3 <= o["time"] <= 2.5 + 1e-3  # in frame
+        assert any(abs(g - o["gps"]) < 1e-6 for g, _, _ in b["tags"][i][0])        # and tagged
+        assert (b["glitch"][i] == 0).all() and b["glitch_events"][i] == []          # the real glitch alone
+    ex = gen.replay(b["recipes"][obs[0]])
+    assert ex["observed"][0] == b["observed"][obs[0]]
