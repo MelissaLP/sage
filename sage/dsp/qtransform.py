@@ -215,10 +215,20 @@ class QTransform(torch.nn.Module):
     fres : float or int, optional
         Frequency resolution in Hz, or the number of log-spaced frequencies if ``logf``.
         Default, as gwpy: 0.5 Hz, or 500 frequencies with ``logf``.
+    tbin : int, optional
+        Number of output times per window, instead of ``tres`` (``tres = window / tbin``).
+    fbin : int, optional
+        Number of output frequencies, instead of ``fres``: log-spaced with ``logf`` (as ``fres``),
+        else linearly spaced over ``frange``, both ends included.
     logf : bool
         Log-spaced output frequencies (gwpy default False).
-    outseg : (float, float), optional
+    outseg : (float, float) or list of them, optional
         Output time span ``[start, stop)`` in s from the start of the series. Default: all of it.
+        Several spans (e.g. Gravity Spy's 0.5, 1, 2 and 4 s around a glitch at time c:
+        ``[(c - d / 2, c + d / 2) for d in (0.5, 1, 2, 4)]``) need ``tbin``; the output then has a
+        window axis, ``(..., n_windows, tbin, n_freqs)``, each window exactly the single-span
+        transform. The energies and the Q-plane are computed once and one interpolation covers
+        all windows, so extra windows cost little.
     norm : {"median", "mean", True, False}
         Normalise each row's energies by their median (``True``/``"median"``, gwpy default) or
         mean; ``False`` for the raw energies.
@@ -236,7 +246,7 @@ class QTransform(torch.nn.Module):
     ----------
     qs : Tensor (P,)
         Q of each plane (float64, on the CPU, like ``times`` and ``frequencies``).
-    times : Tensor (n_times,)
+    times : Tensor (n_times,), or (n_windows, n_times) with several ``outseg``
         Output times, in s from the start of the series.
     frequencies : Tensor (n_freqs,)
         Output frequencies, in Hz.
@@ -246,6 +256,7 @@ class QTransform(torch.nn.Module):
     Input / Output
     --------------
     forward(x, gps=None, return_q=False) : (..., T) -> (..., n_times, n_freqs)
+        (or (..., n_windows, n_times, n_freqs) with several ``outseg``).
         Same orientation as gwpy's ``Spectrogram`` (time first); ``.transpose(-1, -2)`` for
         frequency-time images. With ``return_q``, also the Q of the plane chosen for each series.
     """
@@ -261,6 +272,8 @@ class QTransform(torch.nn.Module):
         fres="<default>",
         logf: bool = False,
         outseg=None,
+        tbin: int = None,
+        fbin: int = None,
         norm="median",
         search: float = 0.5,
         dtype: torch.dtype = torch.float32,
@@ -271,6 +284,14 @@ class QTransform(torch.nn.Module):
             raise ValueError(f"dtype must be torch.float32 or torch.float64, got {dtype}.")
         if fres is None:
             raise NotImplementedError("fres=None is not supported (rows differ between Q-planes).")
+        if tbin is not None and tres is not None:
+            raise ValueError("give tres or tbin, not both")
+        if fbin is not None:
+            if fres != "<default>":
+                raise ValueError("give fres or fbin, not both")
+            if int(fbin) < 2:
+                raise ValueError(f"fbin is the number of frequencies (>= 2), got {fbin}")
+            fres = int(fbin)
         if fres == "<default>":                                    # gwpy's QGram.interpolate defaults
             fres = 500 if logf else 0.5
         if logf and int(fres) < 2:
@@ -290,20 +311,31 @@ class QTransform(torch.nn.Module):
         qs = list(_iter_qs(qrange, mismatch))
         self.frange = tuple(_tiling_frange(qs, frange, duration, self.sample_rate))
 
-        # output grid, exactly as QGram.interpolate builds it
-        outseg = (0.0, duration) if outseg is None else (float(outseg[0]), float(outseg[1]))
-        if tres is None:
-            tres = abs(outseg[1] - outseg[0]) / 1000.0
-        xout = np.arange(*outseg, step=tres)
+        # output grid, exactly as QGram.interpolate builds it; several windows: their grids one after
+        # the other, so one time interpolation (linear in the energies) serves them all
+        multi = outseg is not None and np.ndim(outseg[0]) == 1
+        segs = [(0.0, duration)] if outseg is None else [tuple(map(float, o)) for o in (outseg if multi else [outseg])]
+        if multi and tbin is None:
+            raise ValueError("several outseg windows need tbin (the same number of times in each)")
+        grids = []
+        for a, b in segs:
+            if tbin is not None:
+                grids.append(a + np.arange(int(tbin)) * ((b - a) / int(tbin)))
+            else:
+                grids.append(np.arange(a, b, step=abs(b - a) / 1000.0 if tres is None else tres))
+        xout = np.concatenate(grids)
+        self._n_windows = len(segs) if multi else None
         energy_np_dtype = np.float32 if self.norm else np.float64
         if logf:
             outfreq = np.geomspace(self.frange[0], self.frange[1], num=int(fres))
+        elif fbin is not None:
+            outfreq = np.linspace(self.frange[0], self.frange[1], int(fbin), dtype=energy_np_dtype)
         else:
             outfreq = np.arange(self.frange[0], self.frange[1], fres, dtype=energy_np_dtype)
 
         # float64 metadata stays on the CPU (not buffers): MPS has no float64
         self.qs = torch.tensor(qs, dtype=torch.float64)
-        self.times = torch.tensor(xout, dtype=torch.float64)
+        self.times = torch.tensor(np.stack(grids) if multi else xout, dtype=torch.float64)
         self.frequencies = torch.tensor(np.asarray(outfreq, dtype=np.float64))
         self.register_buffer("_dtype_ref", torch.zeros(0, dtype=dtype))
 
@@ -402,7 +434,7 @@ class QTransform(torch.nn.Module):
         """Interpolated spectrogram of plane ``p``: (M, F) -> (M, n_times, n_freqs)."""
         groups, nrows = self._planes[p]
         M = X.shape[0]
-        nx = self.times.numel()
+        nx = self.times.numel()                                    # all windows' times, one after the other
         rows_t = torch.zeros(M, nrows, nx, dtype=self.dtype, device=X.device)
         for name, ntiles in groups:
             energy = self._group_energy(X, name)                  # (M, R, ntiles)
@@ -458,7 +490,9 @@ class QTransform(torch.nn.Module):
             sel = torch.nonzero(choice == p).squeeze(-1)
             if sel.numel():
                 out = out.index_copy(0, sel, self._plane_spectrogram(X[sel], p))
-        out = out.reshape(*lead, *out.shape[-2:])
+        if self._n_windows:
+            out = out.reshape(out.shape[0], self._n_windows, -1, out.shape[-1])
+        out = out.reshape(*lead, *out.shape[1:])
         if return_q:
             return out, self.qs[choice.cpu()].reshape(lead)
         return out

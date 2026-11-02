@@ -294,3 +294,36 @@ def test_inverse_of_masked_tiles_is_bounded():
         mask = torch.rand(Z.shape, generator=torch.Generator().manual_seed(0), dtype=torch.float64) > 0.5
         rec = qt.inverse(Z * mask, q)
         assert rec.norm() <= x.norm()
+
+
+def test_several_windows_are_each_the_single_window_transform():
+    x = torch.tensor(_data())
+    c = 1.2                                                    # the loud glitch of [0, 0]
+    windows = [(c - d / 2, c + d / 2) for d in (0.25, 0.5, 1.0)]
+    qt = QTransform(FS, T, outseg=windows, tbin=200, logf=True, fbin=64, frange=(20, 800), dtype=torch.float64)
+    out, q = qt(x, return_q=True)
+    assert out.shape == (2, 2, 3, 200, 64) and qt.times.shape == (3, 200)
+    for w, seg in enumerate(windows):
+        one = QTransform(FS, T, outseg=seg, tbin=200, logf=True, fbin=64, frange=(20, 800), dtype=torch.float64)
+        ref, q1 = one(x, return_q=True)
+        torch.testing.assert_close(out[..., w, :, :], ref, rtol=1e-10, atol=1e-10)
+        torch.testing.assert_close(qt.times[w], one.times)
+        torch.testing.assert_close(q, q1)
+
+
+def test_tbin_fbin_and_gwpy_equivalent():
+    x = _data()
+    qt = QTransform(FS, T, outseg=(0.5, 1.5), tbin=500, fbin=200, frange=(20, 500), dtype=torch.float64)
+    out = qt(torch.tensor(x))
+    assert out.shape == (2, 2, 500, 200)
+    np.testing.assert_allclose(qt.times.numpy(), 0.5 + np.arange(500) * 0.002)
+    np.testing.assert_allclose(qt.frequencies.numpy()[[0, -1]], [20, 500])          # both ends included
+    log = QTransform(FS, T, outseg=(0.5, 1.5), tbin=500, logf=True, fbin=300, dtype=torch.float64)
+    ref = _gwpy(x[0, 0], outseg=(0.5, 1.5), tres=0.002, logf=True, fres=300)        # tbin = window / tres
+    np.testing.assert_allclose(log(torch.tensor(x))[0, 0].numpy(), ref.value, atol=1e-6 * np.abs(ref.value).max())
+    with pytest.raises(ValueError, match="tres or tbin"):
+        QTransform(FS, T, tres=0.01, tbin=100)
+    with pytest.raises(ValueError, match="fres or fbin"):
+        QTransform(FS, T, fres=1.0, fbin=100)
+    with pytest.raises(ValueError, match="need tbin"):
+        QTransform(FS, T, outseg=[(0, 1), (0.5, 1.5)])
