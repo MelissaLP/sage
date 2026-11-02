@@ -201,14 +201,28 @@ class StrainCache:
     def piece(self, detector, lo, hi, segment):
         """Decimated float32 strain of [lo, hi) and its provenance (fetched and stored on first use)."""
         path = self._path(detector, lo, hi)
-        if path.with_suffix(".npy").exists():
-            return np.load(path.with_suffix(".npy")), json.loads(path.with_suffix(".json").read_text())
+        if path.with_suffix(".npy").exists():                              # memory-mapped: windows read their part
+            return np.load(path.with_suffix(".npy"), mmap_mode="r"), json.loads(path.with_suffix(".json").read_text())
         if not self.fetch_missing:
             raise FileNotFoundError(f"{path}.npy is not in the cache: run `python -m eucaif.v3.sources download` "
                                     f"first (or set cache.fetch_missing: true)")
         fa, fb = max(lo - self.margin, segment[0]), min(hi + self.margin, segment[1])
         x, rate, prov, errors = self._fetch(detector, fa, fb)
         return self._store(detector, lo, hi, x, rate, fa, prov, errors)
+
+    def cached(self, segments, detectors):
+        """The parts of ``segments`` [(start, end), ...] whose pieces are in the cache for every detector, as
+        segments (whole pieces, so windows inside them read only cached files)."""
+        have = {det: {p.stem for p in (self.dir / det).glob("*.npy")} for det in detectors}
+        out = []
+        for seg in segments:
+            for lo, hi in self.pieces(seg[0], seg[1], seg):
+                if all(self._path(det, lo, hi).name in have[det] for det in detectors):
+                    if out and abs(out[-1][1] - lo) < 1e-9:
+                        out[-1] = (out[-1][0], hi)
+                    else:
+                        out.append((lo, hi))
+        return out
 
     def window(self, detector, start, length, segment):
         """``length`` s of decimated strain from ``start`` (snapped to the sample grid), inside ``segment``.
@@ -224,11 +238,13 @@ class StrainCache:
         parts, provs = [], []
         for lo, hi in self.pieces(t0, t0 + length, segment):
             y, prov = self.piece(detector, lo, hi, segment)
-            parts.append((lo, y))
+            a = max(int(round((t0 - lo) * self.fs)), 0)
+            parts.append(np.asarray(y[a:a + n - sum(map(len, parts))], dtype=np.float64))
             provs.append(prov)
-        x = np.concatenate([y for _, y in parts]).astype(np.float64)
-        i = int(round((t0 - parts[0][0]) * self.fs))
-        return x[i:i + n], t0, provs
+        x = np.concatenate(parts)
+        if x.size != n:
+            raise ValueError(f"{detector}: the cache gave {x.size} samples for a {length} s window at {t0}")
+        return x, t0, provs
 
 
 def plan(segments, chunk_seconds):

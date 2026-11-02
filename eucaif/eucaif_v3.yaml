@@ -24,7 +24,8 @@ cache:                           # filled once by `python -m eucaif.v3.sources d
                                  # absolute); put it on shared disk on a cluster
   chunk_seconds: 4096            # GPS-aligned chunk = one GWOSC file, downloaded once
   margin_seconds: 0.0            # extra data around each piece for the decimation (>0 costs a 2nd GWOSC file)
-  fetch_missing: false           # training reads only the cache (true: fetch missing pieces on the fly)
+  fetch_missing: false           # false: read only the cache, drawing windows where it has data (a partial
+                                 # download works); true: fetch missing pieces on the fly
 segments:
   min_length: 32.0               # s of contiguous good time a window needs (PSD context + frame); shorter
                                  # stretches are not used
@@ -62,9 +63,11 @@ signal:
                                  # IMRPhenomXP, IMRPhenomXPHM (the prior must provide the parameters they need)
   tc_in_frame: [0.5, 1.5]        # s, geocentric merger time from the start of the frame
   snr_range: null                # null: physical distances; [MIN, MAX]: network SNR against this window's PSD
+  fraction: 0.5                  # share of examples with a BBH (label y = 1); 0: real noise only
 glitches:                        # as v2.3: analytic shapes (strain), Gravity Spy O3a class rates per detector
   population: sage_analytic_glitches.yaml
-  probability: 0.5
+  probability: 0.5               # share of (example, detector) with these glitches; 0: none of these
+                                 # (`glitches: null` turns off these and nonphysical_glitches)
   per_window: [1, 3]
   f_low: 15.0
 nonphysical_glitches:            # as v2: one McGAN shape per (example, detector), Blip-like SNRs; probability 0: off

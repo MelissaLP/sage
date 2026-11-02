@@ -13,11 +13,12 @@ Per example (all times from the GPS start of the context):
    detector of the network (same GPS time);
 2. its PSD per detector: median Welch (``TorchWelch``) over the context, or (``psd.exclude_centre``) over its two
    sides only, averaged, as ggwd FM production does, so a loud glitch in the stored window does not bias it;
-3. half the examples get a BBH: SAGE's waveform (default ``IMRPhenomPv2``; SAGE also has IMRPhenomD, XAS, XHM, XP and
-   XPHM) from the v1 prior with tc in the frame, projected with the sidereal time of the window's real GPS time
-   (``ConstantProjection.set_gps``), physical distances or rescaled to ``snr_range`` against this window's PSD;
-4. glitches (``GlitchPopulation``, analytic shapes as strain, v2's populations) are injected in the stored window at
-   their SNR against this window's PSD;
+3. ``signal.fraction`` of the examples (default half; 0: noise only) get a BBH: SAGE's waveform (default
+   ``IMRPhenomPv2``; SAGE also has IMRPhenomD, XAS, XHM, XP and XPHM) from the v1 prior with tc in the frame,
+   projected with the sidereal time of the window's real GPS time (``ConstantProjection.set_gps``), physical
+   distances or rescaled to ``snr_range`` against this window's PSD;
+4. glitches (``GlitchPopulation``, analytic shapes as strain, v2's populations; ``probability: 0`` or no
+   ``glitches`` section: none) are injected in the stored window at their SNR against this window's PSD;
 5. the sum is whitened with the configured ``Whitener`` (with this window's ASD) and cropped to the stored window;
    the injected BBH and glitches are whitened alone too (the whitening is linear), as targets.
 
@@ -100,8 +101,12 @@ class EucaifV3:
         if list(self.seg_file["detectors"]) != self.detectors:
             raise ValueError(f"segments are for {self.seg_file['detectors']}, the config for {self.detectors}")
         self.split_segments = S.split_segments(self.seg_file["segments"], cfg["split"])[split]
-        self.sampler = S.WindowSampler(self.split_segments, self.context)
         self.cache = StrainCache.from_config(cfg, log=log)
+        if not self.cache.fetch_missing:                     # read only the local cache: draw where it has data
+            cached = self.cache.cached(self.split_segments, self.detectors)
+            log(f"{split}: {S.total(cached) / 3600:.1f} h of {S.total(self.split_segments) / 3600:.1f} h in the cache")
+            self.split_segments = cached
+        self.sampler = S.WindowSampler(self.split_segments, self.context)
         p = cfg.get("psd", {})
         self.welch = TorchWelch(delta_t=1 / self.fs, seg_len=int(round(p.get("segment_seconds", 4.0) * self.fs)),
                                 seg_stride=int(round(p.get("segment_seconds", 4.0) * self.fs / 2)))
@@ -109,19 +114,24 @@ class EucaifV3:
         self.tags = S.GlitchTags([dict(t, path=cfg["_dir"] / t["path"]) for t in cfg.get("glitch_tags") or []])
         # SAGE waveforms read SAGE's global configs (as v2): one call gives batch_size / 2 signals
         v2 = _v2_view(cfg)
-        _register(v2, batch_size=batch_size, device=device)
         self._tmp = tempfile.TemporaryDirectory()
-        self.param_sampler = read_from_config(_prior_with_tc(v2, self._tmp.name), seed=seed)
-        self.projection = ConstantProjection()
-        self.signal_sampler = _waveform_class(cfg["signal"].get("approximant", "IMRPhenomPv2"))(
-            self.param_sampler, self.projection)
-        self.cols = self.param_sampler.param_index
+        self.signal_fraction = float(cfg["signal"].get("fraction", 0.5))
+        if not 0 <= self.signal_fraction <= 1:
+            raise ValueError(f"signal.fraction must be in [0, 1], got {self.signal_fraction}")
+        self.cols = {}
+        if self.signal_fraction > 0:
+            _register(v2, batch_size=batch_size, device=device)
+            self.param_sampler = read_from_config(_prior_with_tc(v2, self._tmp.name), seed=seed)
+            self.projection = ConstantProjection()
+            self.signal_sampler = _waveform_class(cfg["signal"].get("approximant", "IMRPhenomPv2"))(
+                self.param_sampler, self.projection)
+            self.cols = self.param_sampler.param_index
         self.snr_range = cfg["signal"].get("snr_range")
         self.f_low_signal = float(d["signal_low_frequency_cutoff"])
         if cfg.get("glitches"):
             v2["glitches"] = dict(cfg["glitches"], population=str(_network_population(cfg, self._tmp.name)))
         self.glitches = _populations(v2) if cfg.get("glitches") else []
-        self.glitch_f_low = cfg.get("glitches", {}).get("f_low")
+        self.glitch_f_low = (cfg.get("glitches") or {}).get("f_low")
         self.batch_size = int(batch_size)
         self.rng = np.random.default_rng(seed)
         self.seed = seed
@@ -197,9 +207,9 @@ class EucaifV3:
         psd = torch.stack(psd)                                                        # (n, D, F)
         asd = psd.sqrt()
 
-        # BBHs in half the examples
+        # BBHs in signal.fraction of the examples
         y = torch.zeros(n, dtype=torch.long)
-        y[self.rng.permutation(n)[: n // 2]] = 1
+        y[self.rng.permutation(n)[: int(round(self.signal_fraction * n))]] = 1
         sig = torch.zeros_like(x)
         snr_det = torch.full((n, D), float("nan"), dtype=torch.float64)
         theta_full = torch.full((n, len(self.cols)), float("nan"), dtype=torch.float64)
