@@ -215,3 +215,62 @@ def test_lowpass_matches_gengli_low_pass_glitch_on_gengli_glitches():
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# -- representation: whitened shapes (gengli, DeepExtractor) vs strain shapes (analytic models) ----
+
+def test_strain_representation_adds_the_scaled_shape_at_the_snr():
+    """A strain shape is added as is (no colouring), scaled to the requested SNR against the ASD."""
+    T, t_inj, snr = int(8 * FS), 4.0, 17.0
+    asd = _asd()
+    g = _sine_gaussian(f0=150.0, tau=0.02)
+    for dtype in (torch.float64, torch.float32):
+        strain = torch.zeros(1, 1, T, dtype=dtype)
+        _, h = add_glitch(strain, g[None, None], asd, snr, FS, t_inj=t_inj, taper_alpha=0.1,
+                          return_glitch=True, representation="strain")
+        h = h[0, 0].double()
+        placed = torch.zeros(T, dtype=torch.float64)
+        i0 = int(round(t_inj * FS)) - g.numel() // 2
+        placed[i0:i0 + g.numel()] = g * tukey_window(g.numel(), 0.1)
+        scale = float(h @ placed / (placed @ placed))
+        rtol = 1e-10 if dtype == torch.float64 else 2e-5
+        np.testing.assert_allclose(h.numpy(), scale * placed.numpy(), rtol=0, atol=rtol * float(h.abs().max()))
+        assert _snr_against_asd(h.numpy(), asd, FS) == pytest.approx(snr, rel=rtol * 10)
+
+
+def test_strain_representation_moves_the_whitened_peak_above_f0():
+    """Antiglitch defines f0 in strain: whitened, a broad Blip with f0 = 12 Hz peaks near 60 Hz (its fits
+    report whitened Blip peaks of 65-243 Hz). As a whitened shape it would peak at f0."""
+    pycbc_psd = pytest.importorskip("pycbc.psd")
+    from sage.data.noise.analytic_glitches import antiglitch_glitch
+
+    T, f0, gbw = int(8 * FS), 12.0, 0.29
+    f = np.fft.rfftfreq(T, 1 / FS)
+    a = np.sqrt(pycbc_psd.aLIGOZeroDetHighPower(f.size, FS / T, 10.0).numpy())     # 0 below 10 Hz
+    asd = torch.tensor(a)
+    shape = antiglitch_glitch(1, FS, duration=4.0, f0=f0, gbw=gbw, t0=2.0, phi=np.pi / 2, dtype=torch.float64)
+    ok = a > 0
+    bump = np.exp(-0.5 * gbw * (np.log(np.maximum(f, 1e-3)) - np.log(f0)) ** 2)
+    expected = f[ok][(bump[ok] / a[ok]).argmax()]                                  # peak of bump / ASD
+    peaks = {}
+    for rep in ("strain", "whitened"):
+        _, h = add_glitch(torch.zeros(1, 1, T, dtype=torch.float64), shape[None], asd, 20.0, FS,
+                          t_inj=4.0, taper_alpha=0.0, return_glitch=True, representation=rep)
+        white = np.abs(np.fft.rfft(h[0, 0].numpy()))[ok] / a[ok]
+        peaks[rep] = f[ok][white.argmax()]
+    assert peaks["whitened"] == pytest.approx(f0, abs=1.0)
+    assert peaks["strain"] == pytest.approx(expected, abs=2.0) and expected > 50.0, (peaks, expected)
+
+
+def test_population_classes_take_their_generators_representation():
+    from sage.data.noise.glitch_population import GlitchPopulation
+
+    pop = GlitchPopulation({"sample_rate": FS, "classes": {
+        "Blip": {"generator": "antiglitch_glitch"}, "Gengli": {"generator": "gengli_glitch"},
+        "AsWhitened": {"generator": "sine_gaussian", "representation": "whitened"}}})
+    assert {k: c["representation"] for k, c in pop.classes.items()} == \
+        {"Blip": "strain", "Gengli": "whitened", "AsWhitened": "whitened"}
+    with pytest.raises(ValueError):
+        GlitchPopulation({"sample_rate": FS, "classes": {"X": {"generator": "ringdown", "representation": "raw"}}})
+    with pytest.raises(ValueError):
+        add_glitch(torch.zeros(1, 4096), torch.zeros(1, 64), _asd(), 5.0, FS, representation="raw")

@@ -23,7 +23,7 @@ edges the whitening discards.
 
 ## Glitch sources
 
-All of them give whitened glitch shapes for `GlitchInjector` (`glitch_noise.py`), which sets their amplitude by SNR.
+All of them are injected by `GlitchInjector` (`glitch_noise.py`), which sets their amplitude by SNR. gengli's blips and DeepExtractor's reconstructions are *whitened* glitches (`representation="whitened"`, the default); the analytic shapes are glitches in the *strain*, as their sources define them (`representation="strain"`, set automatically by `GlitchPopulation`).
 
 | Source | SAGE code | Origin |
 |---|---|---|

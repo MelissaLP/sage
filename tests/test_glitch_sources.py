@@ -400,7 +400,7 @@ def test_population_apply_equals_add_glitch():
     for s, evs in enumerate(events):
         for e in evs:
             ref[s:s + 1] = add_glitch(ref[s:s + 1], e["glitch"][None], asd_s[s], e["snr"], fs, t_inj=e["time"],
-                                      f_low=10.0, f_high=900.0)
+                                      f_low=10.0, f_high=900.0, representation=pop.classes[e["cls"]]["representation"])
     assert sum(map(len, events)) > 30
     torch.testing.assert_close(out.reshape(-1, n), ref, rtol=0, atol=1e-9 * float(ref.abs().max()))
 

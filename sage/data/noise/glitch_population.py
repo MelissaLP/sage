@@ -25,9 +25,12 @@ Documentation:
     - ``phases`` are in GWForge's cosine convention, h ~ cos(2 pi f0 (t - t0) + phase). SAGE's
       sine-Gaussian, ringdown and Antiglitch shapes use a sine, so phi = phase + pi / 2 is passed to them.
 
-    Shapes come from ``analytic_glitches`` (and gengli's blips from ``gengli_glitches``), centred in an array of
-    ``duration`` seconds. ``inject`` does what ``add_glitch`` does for each glitch (taper, place,
-    band-limit and scale to its SNR, colour with the ASD), vectorised: each class is sampled once
+    Shapes come from ``analytic_glitches`` (and gengli's blips from ``gengli_glitches``). The analytic
+    shapes are glitches in the *strain* (as Antiglitch, ArchEnemy and McGAN define them) and gengli's
+    are *whitened* glitches; a class's ``representation`` key overrides this (see ``glitch_noise``).
+    Each is centred in an array of ``duration`` seconds. ``inject`` does what ``add_glitch`` does for
+    each glitch (taper, place, whiten if a strain shape, band-limit and scale to its SNR, colour with
+    the ASD), vectorised: each class is sampled once
     for the whole batch, glitches of the same length are processed together in the frequency domain
     (one FFT per glitch), and since colouring is linear, each series is coloured and brought back
     to the time domain once, with the sum of its scaled glitches.
@@ -52,10 +55,14 @@ from torch import Tensor
 
 from .analytic_glitches import ANALYTIC_GLITCHES
 from .gengli_glitches import gengli_glitch
-from .glitch_noise import _band_mask, _resample_asd, place_glitch, tukey_window
+from .glitch_noise import _band_mask, _resample_asd, _strain_to_white, place_glitch, tukey_window
 
 GENERATORS = dict(ANALYTIC_GLITCHES, gengli_glitch=gengli_glitch)
-CLASS_KEYS = {"generator", "rate", "weight", "snr_range", "snr_index", "phases", "duration", "log_uniform"}
+# what each generator's shapes are (see glitch_noise): the analytic models are glitches in the strain
+# (Antiglitch, ArchEnemy, McGAN define them there), gengli's GAN blips are whitened glitches
+REPRESENTATION = dict({name: "strain" for name in ANALYTIC_GLITCHES}, gengli_glitch="whitened")
+CLASS_KEYS = {"generator", "rate", "weight", "snr_range", "snr_index", "phases", "duration", "log_uniform",
+              "representation"}
 PHASED = {"sine_gaussian", "ringdown", "antiglitch_glitch"}
 
 
@@ -118,6 +125,8 @@ class GlitchPopulation:
             raise ValueError(f"{name}: 'phases' only applies to {sorted(PHASED)}")
         if "phases" in c and "phi" in c:
             raise ValueError(f"{name}: give 'phases' or 'phi', not both")
+        if c.setdefault("representation", REPRESENTATION[gen]) not in ("strain", "whitened"):
+            raise ValueError(f"{name}: representation must be 'strain' or 'whitened', got {c['representation']!r}")
         for key in ("rate", "weight"):
             v = c.get(key, 0.0)
             if isinstance(v, dict) and self.detectors and set(v) - set(self.detectors):
@@ -246,28 +255,32 @@ class GlitchPopulation:
     def apply(self, strain: Tensor, asd: Tensor, events: list, taper_alpha: float = 0.1, f_low: float = None,
               f_high: float = None, lowpass_order=3, max_rows: int = 512) -> Tensor:
         """Add the glitches of ``events`` (one list per series of ``strain``, flattened leading index)
-        to coloured strain (..., T): for each, exactly ``add_glitch`` with its ``time`` and ``snr``."""
+        to coloured strain (..., T): for each, exactly ``add_glitch`` with its ``time``, ``snr`` and its
+        class's ``representation`` (``"strain"`` for the analytic models, ``"whitened"`` for gengli)."""
         T = strain.shape[-1]
         flat = strain.reshape(-1, T)
         if len(events) != flat.shape[0]:
             raise ValueError(f"{len(events)} event lists for {flat.shape[0]} series")
         work = torch.float64 if strain.dtype == torch.float64 else torch.float32
         dev = strain.device
-        groups = {}                                    # glitch length -> rows
+        groups = {}                                    # (glitch length, representation) -> rows
         for s, evs in enumerate(events):
             for e in evs:
-                g = groups.setdefault(e["glitch"].shape[-1], ([], [], [], []))
+                rep = self.classes[e["cls"]]["representation"]
+                g = groups.setdefault((e["glitch"].shape[-1], rep), ([], [], [], []))
                 for lst, v in zip(g, (s, e["glitch"], e["time"], e["snr"])):
                     lst.append(v)
         if not groups:
             return strain.clone()
+        asd = torch.as_tensor(asd, device=dev).to(work)
+        asd = _resample_asd(asd.expand(*strain.shape[:-1], asd.shape[-1]).reshape(-1, asd.shape[-1]), T // 2 + 1)
         # as rescale_glitch + colouring, in the frequency domain: band-limit, SNR
         # rho^2 = 4 df sum |W / fs|^2, scale, sum per series; colour and invert once per series
         fs = self.sample_rate
         mask = _band_mask(T, fs, f_low, f_high, dev, work, lowpass_order)
         white = torch.zeros(flat.shape[0], T // 2 + 1, dtype=torch.complex128 if work == torch.float64
                             else torch.complex64, device=dev)
-        for L, (series, glitches, times, snrs) in groups.items():
+        for (L, rep), (series, glitches, times, snrs) in groups.items():
             win = tukey_window(L, taper_alpha, device=dev, dtype=work) if taper_alpha else None
             for a in range(0, len(series), max_rows):
                 b = a + max_rows
@@ -275,14 +288,16 @@ class GlitchPopulation:
                 if win is not None:
                     g = g * win
                 t = torch.tensor(times[a:b], dtype=torch.float64, device=dev)
-                W = torch.fft.rfft(place_glitch(g, T, torch.round(t * fs).long() - L // 2), dim=-1) * mask
+                idx = torch.tensor(series[a:b], device=dev)
+                W = torch.fft.rfft(place_glitch(g, T, torch.round(t * fs).long() - L // 2), dim=-1)
+                if rep == "strain":                                       # whiten it first (up to a constant)
+                    W = _strain_to_white(W, asd[idx])
+                W = W * mask
                 current = torch.sqrt(4.0 * (fs / T) * ((W.abs() / fs) ** 2).sum(-1))
                 target = torch.tensor(snrs[a:b], dtype=work, device=dev)
                 scale = torch.where(current > 0, target / current.clamp_min(torch.finfo(work).tiny),
                                     torch.zeros_like(current))
-                white.index_add_(0, torch.tensor(series[a:b], device=dev), W * scale[:, None])
-        asd = torch.as_tensor(asd, device=dev).to(work)
-        asd = _resample_asd(asd.expand(*strain.shape[:-1], asd.shape[-1]).reshape(-1, asd.shape[-1]), T // 2 + 1)
+                white.index_add_(0, idx, W * scale[:, None])
         h = torch.fft.irfft(white * asd, n=T, dim=-1)
         return (flat + h.to(strain.dtype)).reshape(strain.shape)
 

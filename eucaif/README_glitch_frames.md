@@ -143,5 +143,8 @@ Each item reproduces a result discussed with Melissa; the expected numbers are w
 - The SNR of each glitch is its optimal SNR against the colouring ASD; with up to 30 glitches per
   window, frames are crowded on purpose (DeepExtractor used 1-30 per 2 s, SNR uniform 1-250; here
   5-100 so quiet glitches are not all buried).
-- Releases: `eucaif-glitch-frames-v1.1` (Antiglitch Blip, Tomte and Koi_Fish); `eucaif-glitch-frames-v1.0`
-  (sine-Gaussian Blip and Tomte, no Koi_Fish). Generate stored sets from a clean checkout of the tag.
+- Releases: `eucaif-glitch-frames-v1.0` (sine-Gaussian Blip and Tomte, no Koi_Fish);
+  `eucaif-glitch-frames-v1.1` (Antiglitch Blip, Tomte and Koi_Fish); v1.2 (current code; tag
+  `eucaif-glitch-frames-v1.2` still to be made): analytic glitches injected as **strain**, as their sources
+  define them, not as whitened shapes (whitened, their power moves to where the detector is most sensitive),
+  and whitening as gwpy >= 4 (after the merge of SAGE `main`). Generate stored sets from a clean checkout of the tag.

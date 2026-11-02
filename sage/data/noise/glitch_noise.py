@@ -21,22 +21,34 @@ GitHub Repository: NULL
 
 Documentation:
 
-    Inject whitened glitch shapes (from gengli, or a DeepExtractor glitch bank) into
-    *coloured* strain at a chosen SNR, so that the pipeline's own whitening
-    (e.g. ``sage.dsp.whiten.FIRWhitening``) is applied to glitch and noise alike:
+    Inject glitch shapes into *coloured* strain at a chosen SNR, so that the pipeline's own
+    whitening (e.g. ``sage.dsp.whiten.FIRWhitening``) is applied to glitch and noise alike:
 
-        injector = GlitchInjector(sample_rate=2048, f_low=20.0)
+        injector = GlitchInjector(sample_rate=2048, f_low=20.0, representation="strain")
         strain = injector(strain, glitches, asd, snr, t_inj=t_inj)   # (B, D, T)
+
+    A shape is one of two things (``representation``):
+
+    - ``"whitened"`` (default): a glitch as seen in *whitened* data, e.g. gengli's GAN blips
+      (trained on whitened Gravity Spy blips) or DeepExtractor's reconstructions. It is coloured
+      with the ASD before being added, so the whitened data show the shape itself.
+    - ``"strain"``: a glitch as it is in the *strain*, before whitening, e.g. the analytic models
+      (Antiglitch fits ``invasd * model``; ArchEnemy whitens its template by sqrt(PSD); McGAN's
+      bursts are strain waveforms). It is added as is, so the whitened data show shape / ASD:
+      its power moves to where the detector is most sensitive.
 
     For each glitch:
 
     1. taper its ends with a Tukey window (as gengli's ``get_glitch``),
     2. place it at ``t_inj`` in a zero series as long as the strain,
-    3. cut below ``f_low``, low-pass above ``f_high`` (zero-phase Butterworth, as gengli's
+    3. ``"strain"`` only: whiten it, w = irfft(rfft(h) / ASD) (up to a constant, the ASD's median,
+       which the SNR scaling removes; bins where the ASD is 0 are dropped, as the whitening does),
+    4. cut below ``f_low``, low-pass above ``f_high`` (zero-phase Butterworth, as gengli's
        ``low_pass_glitch``) and scale it to the requested optimal SNR
        (gengli's ``rescale_glitch``: rho^2 = 4 df sum |dt * rfft(w)|^2),
-    4. colour it with the strain's ASD: h = irfft(rfft(w) * ASD),
-    5. add it to the strain.
+    5. colour it with the strain's ASD: h = irfft(rfft(w) * ASD) (for ``"strain"``: the original
+       shape, scaled),
+    6. add it to the strain.
 
     Why the SNR is set on the whitened shape: for h = irfft(rfft(w) * ASD), the optimal
     SNR of h against that ASD, rho^2 = 4 df sum |dt * rfft(h)|^2 / S, equals
@@ -199,6 +211,19 @@ def rescale_glitch(glitch: Tensor, snr, sample_rate: float, f_low: float = None,
     return glitch * scale.unsqueeze(-1)
 
 
+def _strain_to_white(W: Tensor, asd: Tensor) -> Tensor:
+    """rfft of a strain glitch -> rfft of the same glitch whitened by ``asd``, up to a constant.
+
+    Divides by asd / median(asd > 0) rather than by asd, so the values stay of the order of the
+    strain shape's (no float32 overflow when squared for the SNR); the SNR scaling removes the
+    constant. Bins where the ASD is 0 (e.g. below a low-frequency cutoff) are set to 0.
+    """
+    pos = asd > 0
+    ref = torch.where(pos, asd, torch.full_like(asd, float("nan"))).nanmedian(dim=-1, keepdim=True).values
+    inv = torch.where(pos, ref / torch.where(pos, asd, torch.ones_like(asd)), torch.zeros_like(asd))
+    return W * inv
+
+
 def _resample_asd(asd: Tensor, n_freq: int) -> Tensor:
     """Linearly resample an ASD on a uniform [0, Nyquist] grid onto ``n_freq`` bins.
 
@@ -239,16 +264,18 @@ def add_glitch(
     f_high: float = None,
     lowpass_order=3,
     return_glitch: bool = False,
+    representation: str = "whitened",
 ):
-    """Add whitened glitch(es) to coloured strain at a given SNR. Torch port of gengli's ``add_glitch``.
+    """Add glitch(es) to coloured strain at a given SNR. Torch port of gengli's ``add_glitch``.
 
     Parameters
     ----------
     strain : Tensor, shape (..., T)
         Coloured strain, e.g. (B, D, T).
     glitch : Tensor, shape (..., L)
-        Whitened glitch shapes at ``sample_rate``, one per series (same leading shape as
-        ``strain``). Any normalisation: only the shape matters, the SNR sets the amplitude.
+        Glitch shapes at ``sample_rate``, one per series (same leading shape as ``strain``),
+        whitened or in strain (``representation``). Any normalisation: only the shape matters,
+        the SNR sets the amplitude.
     asd : Tensor, shape (F,) or broadcastable to (..., F)
         One-sided ASD of the strain, in the strain's units / sqrt(Hz), on a uniform grid from
         0 Hz to Nyquist (any number of bins: it is interpolated onto the strain's grid).
@@ -273,12 +300,17 @@ def add_glitch(
         hard cutoff.
     return_glitch : bool
         Also return the coloured glitch that was added.
+    representation : {"whitened", "strain"}
+        What the shapes are (see the module documentation): ``"whitened"`` (gengli,
+        DeepExtractor; default) or ``"strain"`` (the analytic models).
 
     Returns
     -------
     Tensor, shape (..., T): strain + coloured glitch (and the coloured glitch if requested).
     """
     T, L = strain.shape[-1], glitch.shape[-1]
+    if representation not in ("whitened", "strain"):
+        raise ValueError(f"representation must be 'whitened' or 'strain', got {representation!r}")
     if glitch.shape[:-1] != strain.shape[:-1]:
         raise ValueError(f"glitch leading shape {tuple(glitch.shape[:-1])} must match "
                          f"strain leading shape {tuple(strain.shape[:-1])}")
@@ -295,13 +327,17 @@ def add_glitch(
         t_inj = torch.as_tensor(t_inj, dtype=torch.float64, device=strain.device)
         start = torch.round(t_inj * sample_rate).long() - L // 2
     w = place_glitch(g, T, start)
+    asd = torch.as_tensor(asd, device=strain.device).to(work)
+    asd = _resample_asd(asd, T // 2 + 1)                     # the strain's frequency grid
 
-    # 2. band and SNR, on the whitened shape (exact in any whitening convention, see module doc)
+    # 2. a strain shape is whitened first (up to a constant)
+    if representation == "strain":
+        w = torch.fft.irfft(_strain_to_white(torch.fft.rfft(w, dim=-1), asd), n=T, dim=-1)
+
+    # 3. band and SNR, on the whitened shape (exact in any whitening convention, see module doc)
     w = rescale_glitch(w, snr, sample_rate, f_low=f_low, f_high=f_high, lowpass_order=lowpass_order)
 
-    # 3. colour with the strain's ASD on the strain's frequency grid
-    asd = torch.as_tensor(asd, device=strain.device).to(work)
-    asd = _resample_asd(asd, T // 2 + 1)
+    # 4. colour with the strain's ASD
     h = torch.fft.irfft(torch.fft.rfft(w, dim=-1) * asd, n=T, dim=-1)
 
     out = strain + h.to(strain.dtype)
@@ -309,7 +345,7 @@ def add_glitch(
 
 
 class GlitchInjector(torch.nn.Module):
-    """``add_glitch`` with fixed settings, as a module.
+    """``add_glitch`` with fixed settings, as a module (``representation``: see ``add_glitch``).
 
     Example
     -------
@@ -318,8 +354,11 @@ class GlitchInjector(torch.nn.Module):
     """
 
     def __init__(self, sample_rate: float, taper_alpha: float = 0.1,
-                 f_low: float = None, f_high: float = None, lowpass_order=3):
+                 f_low: float = None, f_high: float = None, lowpass_order=3, representation: str = "whitened"):
         super().__init__()
+        if representation not in ("whitened", "strain"):
+            raise ValueError(f"representation must be 'whitened' or 'strain', got {representation!r}")
+        self.representation = representation
         self.sample_rate = sample_rate
         self.taper_alpha = taper_alpha
         self.f_low = f_low
@@ -330,4 +369,5 @@ class GlitchInjector(torch.nn.Module):
                 return_glitch: bool = False):
         return add_glitch(strain, glitch, asd, snr, self.sample_rate, t_inj=t_inj,
                           taper_alpha=self.taper_alpha, f_low=self.f_low, f_high=self.f_high,
-                          lowpass_order=self.lowpass_order, return_glitch=return_glitch)
+                          lowpass_order=self.lowpass_order, return_glitch=return_glitch,
+                          representation=self.representation)

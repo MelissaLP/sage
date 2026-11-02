@@ -16,10 +16,16 @@ Documentation:
     (the names ``GlitchPopulation`` configs use as ``generator``). The phase ``phi`` multiplies
     a sine: phi = pi / 2 is a glitch symmetric about t0.
 
-    The shapes are meant for ``GlitchInjector``, which sets their amplitude by SNR:
+    All shapes are glitches in the *strain* (before whitening), as their sources define them:
+    Antiglitch fits ``invasd * model`` to whitened data, ArchEnemy whitens its arch template by
+    sqrt(PSD), and McGAN's bursts are strain waveforms. Whitened, their power moves to where the
+    detector is most sensitive (an Antiglitch Blip with f0 = 12 Hz peaks near 60 Hz). They are meant
+    for ``GlitchInjector`` with ``representation="strain"``, which sets their amplitude by SNR
+    (``GlitchPopulation`` does this for them):
 
         glitch = sine_gaussian(B * D, sample_rate=2048).view(B, D, -1)
-        strain = GlitchInjector(2048, f_low=20.0)(strain, glitch, asd, snr, t_inj=t_inj)
+        inject = GlitchInjector(2048, f_low=20.0, representation="strain")
+        strain = inject(strain, glitch, asd, snr, t_inj=t_inj)
 
     ``GlitchInjector`` centres the glitch *array* at ``t_inj``; the glitch itself sits at t0
     inside it, so pass ``t0=duration / 2`` to put it exactly at ``t_inj``.
