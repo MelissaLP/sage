@@ -158,3 +158,22 @@ def test_observed_glitches_centre_windows_on_tagged_glitches(tmp_path):
         assert (b["glitch"][i] == 0).all() and b["glitch_events"][i] == []          # the real glitch alone
     ex = gen.replay(b["recipes"][obs[0]])
     assert ex["observed"][0] == b["observed"][obs[0]]
+    gen.obs_pool = {k: v[::-1] for k, v in gen.obs_pool.items()}               # the cache grew: another pool
+    again = gen.replay(b["recipes"][obs[0]])
+    assert again["observed"][0] == b["observed"][obs[0]]                          # the recipe's glitch, not a new one
+    torch.testing.assert_close(again["x"], b["x"][obs[0]:obs[0] + 1], rtol=0, atol=0)
+
+
+def test_small_batch_sizes_and_an_empty_cache(tmp_path):
+    from eucaif.v3.generator import take
+    gen = _generator(tmp_path, seed=3)
+    for bs in (1, 3):
+        one = EucaifV3(gen.cfg, split="train", seed=3, batch_size=bs, log=lambda *a: None)
+        one.cache.sources = [ColouredNoise()]
+        b = one.batch(4)
+        assert b["x"].shape == (4, 2, 8192) and int(b["y"].sum()) == 2
+    assert take(b, 1)["asd_frequencies"].shape == b["asd_frequencies"].shape        # shared, not sliced
+    cfg = copy.deepcopy(gen.cfg)
+    cfg["cache"] = dict(cfg["cache"], directory=str(tmp_path / "empty"), fetch_missing=False)
+    with pytest.raises(ValueError, match="run `python -m eucaif.v3.sources download` first"):
+        EucaifV3(cfg, log=lambda *a: None)

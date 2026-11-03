@@ -137,3 +137,22 @@ def test_plan_groups_pieces_by_chunk():
     assert SRC.plan(seg, 4096.0) == [(2, [(4096.0 * 2 + 100, 4096.0 * 3)]),
                                      (3, [(4096.0 * 3, 4096.0 * 3 + 50)]),
                                      (5, [(4096.0 * 5 + 10, 4096.0 * 5 + 20)])]
+
+
+def test_pieces_are_written_atomically(tmp_path, monkeypatch):
+    cache = SRC.StrainCache(tmp_path, [StubSource()], sample_rate=2048, log=lambda *a: None)
+    piece = (SEG[0], SEG[0] + 64.0)
+    cache.fill_chunk("H1", [piece])
+    assert sorted(p.name for p in (tmp_path / "H1").iterdir()) == \
+        [f"H1-{int(SEG[0])}-64.json", f"H1-{int(SEG[0])}-64.npy"]                     # no temporary files left
+    other = (SEG[0] + 64.0, SEG[0] + 128.0)
+
+    def killed(*a, **k):                                                              # the job dies mid-write
+        raise KeyboardInterrupt
+    monkeypatch.setattr(SRC.np, "save", killed)
+    with pytest.raises(KeyboardInterrupt):
+        cache.fill_chunk("H1", [other])
+    monkeypatch.undo()
+    assert not cache._path("H1", *other).with_suffix(".npy").exists()                 # not taken as cached
+    assert cache.cached([piece, other], ["H1"]) == [piece]
+    assert cache.fill_chunk("H1", [other]) == 1                                       # a rerun fills it

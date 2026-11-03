@@ -108,6 +108,9 @@ class EucaifV3:
         if not self.cache.fetch_missing:                     # read only the local cache: draw where it has data
             cached = self.cache.cached(self.split_segments, self.detectors)
             log(f"{split}: {S.total(cached) / 3600:.1f} h of {S.total(self.split_segments) / 3600:.1f} h in the cache")
+            if not any(b - a >= self.context for a, b in cached):
+                raise ValueError(f"the cache {self.cache.dir} has no {self.context:g} s of {split} data for "
+                                 f"{self.detectors}: run `python -m eucaif.v3.sources download` first")
             self.split_segments = cached
         self.sampler = S.WindowSampler(self.split_segments, self.context)
         p = cfg.get("psd", {})
@@ -123,7 +126,8 @@ class EucaifV3:
             raise ValueError(f"signal.fraction must be in [0, 1], got {self.signal_fraction}")
         self.cols = {}
         if self.signal_fraction > 0:
-            _register(v2, batch_size=batch_size, device=device)
+            self._per_call = max(1, int(batch_size) // 2)              # BBHs per waveform call (SAGE: half a batch)
+            _register(v2, batch_size=2 * self._per_call, device=device)
             self.param_sampler = read_from_config(_prior_with_tc(v2, self._tmp.name), seed=seed)
             self.projection = ConstantProjection()
             self.signal_sampler = _waveform_class(cfg["signal"].get("approximant", "IMRPhenomPv2"))(
@@ -202,7 +206,7 @@ class EucaifV3:
     def _signals(self, gps_centres):
         """BBHs for len(gps_centres) examples: (n, D, N) strain on the context grid, and their parameters."""
         n = len(gps_centres)
-        per_call = self.batch_size // 2
+        per_call = self._per_call
         hs, thetas = [], []
         for k in range(0, n, per_call):
             gps = np.asarray(gps_centres[k:k + per_call])
@@ -255,9 +259,10 @@ class EucaifV3:
 
     # -- a batch ---------------------------------------------------------------------------------------
 
-    def batch(self, n=None, key=None, starts=None):
+    def batch(self, n=None, key=None, starts=None, observed=None):
         """``n`` examples. ``key``: ints naming the batch, which fix all its randomness with the generator's seed
-        (default: a counter); ``starts``: the context GPS starts to use instead of drawing windows (``replay``)."""
+        (default: a counter); ``starts`` and ``observed``: the context GPS starts and observed glitches to use
+        instead of drawing them (``replay``)."""
         n = int(n or self.batch_size)
         if key is None:
             key, self._count = (self._count,), self._count + 1
@@ -266,18 +271,23 @@ class EucaifV3:
         rng_win, rng_inj = (np.random.default_rng(q) for q in seq.spawn(2))
         if self.signal_fraction > 0:
             self.param_sampler.generator.manual_seed(int(seq.generate_state(1)[0]))
-        observed = self._draw_observed(n, rng_win)
+        drawn_obs = self._draw_observed(n, rng_win)
         drawn, segs = self.sampler.sample(n, rng_win, return_segments=True)
         segs = list(segs)
         if starts is None:
             starts = drawn
             off = self.stored_offset + self.q_padding
-            for p, (k, u) in observed.items():
-                starts[p] = self.obs_pool["gps"][k] - (off + u)
+            P = getattr(self, "obs_pool", None)
+            observed = {p: dict(detector=self.detectors[P["det"][k]], gps=float(P["gps"][k]),
+                                label=str(P["label"][k]), confidence=float(P["conf"][k]))
+                        for p, (k, u) in drawn_obs.items()}
+            for p, (k, u) in drawn_obs.items():
+                starts[p] = P["gps"][k] - (off + u)
                 segs[p] = self._segment_of(starts[p])
-        else:
+        else:                                                      # replay: the recipe's windows and glitches
             starts = np.asarray(starts, dtype=np.float64)
             segs = [self._segment_of(t) for t in starts]
+            observed = {int(p): dict(o) for p, o in (observed or {}).items()}
         D = len(self.detectors)
         x = np.zeros((n, D, self.N))
         gps0, prov = np.zeros(n), []
@@ -353,11 +363,10 @@ class EucaifV3:
         gps_stored = gps0 + self.stored_offset
         tags = [[self.tags.in_window(det, gs, gs + self.stored) for det in self.detectors] for gs in gps_stored]
         obs = [None] * n
-        for p, (k, u) in observed.items():
-            P = self.obs_pool
-            obs[p] = dict(detector=self.detectors[P["det"][k]], gps=float(P["gps"][k]), label=str(P["label"][k]),
-                          confidence=float(P["conf"][k]), time=float(P["gps"][k] - gps_stored[p]))
-        recipe = dict(config=self.config_hash, seed=self.seed, key=list(key), n=n, context_gps=gps0.tolist())
+        for p, o in observed.items():
+            obs[p] = dict(o, time=float(o["gps"] - gps_stored[p]))
+        recipe = dict(config=self.config_hash, seed=self.seed, key=list(key), n=n, context_gps=gps0.tolist(),
+                      observed={p: dict(o) for p, o in observed.items()})
         recipes = [dict(recipe, position=i) for i in range(n)]
         return dict(out, y=y, snr=snr_det.norm(dim=-1), snr_det=snr_det, fplus=fplus, fcross=fcross, delay=delay,
                     observed=obs, recipes=recipes,
@@ -371,7 +380,7 @@ class EucaifV3:
         cache that has grown since does not matter), injections and whitening. Needs the same config and seed."""
         if recipe["config"] != self.config_hash or recipe["seed"] != self.seed:
             raise ValueError("this recipe was made with another config or seed")
-        b = self.batch(recipe["n"], key=recipe["key"], starts=recipe["context_gps"])
+        b = self.batch(recipe["n"], key=recipe["key"], starts=recipe["context_gps"], observed=recipe["observed"])
         return take(b, recipe["position"])
 
 
@@ -379,7 +388,9 @@ def take(batch, i):
     """Example ``i`` of a batch, as a batch of one (tensors keep a leading axis of 1)."""
     out = {}
     for k, v in batch.items():
-        if torch.is_tensor(v) and v.dim() and v.shape[0] == len(batch["y"]):
+        if k == "asd_frequencies":                                 # shared by the batch, not per example
+            out[k] = v
+        elif torch.is_tensor(v) and v.dim() and v.shape[0] == len(batch["y"]):
             out[k] = v[i:i + 1]
         elif isinstance(v, list) and len(v) == len(batch["y"]):
             out[k] = v[i:i + 1]

@@ -38,6 +38,7 @@ network's segments need, once each, and is split into parts for a batch system (
 import argparse
 import json
 import math
+import os
 import time
 from pathlib import Path
 
@@ -163,8 +164,14 @@ class StrainCache:
                     fetched_at=time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()), failed_sources=errors)
         path = self._path(detector, lo, hi)
         path.parent.mkdir(parents=True, exist_ok=True)
-        np.save(path.with_suffix(".npy"), y)
-        path.with_suffix(".json").write_text(json.dumps(prov))
+        # atomic: provenance first, then the data renamed into place, so a .npy exists only complete (a job
+        # killed mid-write leaves a temporary file, not a truncated piece that later runs would trust)
+        for suffix, write in ((".json", lambda fh: fh.write(json.dumps(prov).encode())),
+                              (".npy", lambda fh: np.save(fh, y))):
+            tmp = path.with_name(f"{path.name}{suffix}.tmp{os.getpid()}")
+            with open(tmp, "wb") as fh:
+                write(fh)
+            os.replace(tmp, path.with_suffix(suffix))
         return y, prov
 
     def fill_chunk(self, detector, pieces):
