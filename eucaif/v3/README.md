@@ -33,47 +33,27 @@ The stored window (1 s + 2 s frame + 1 s), the BBH prior, `tc` and the glitch po
 ## Workflow
 
 ```mermaid
-flowchart TD
+flowchart TB
     subgraph once["Once (offline)"]
-        direction TB
-        DQ["GWOSC timeline: DATA, CAT2, HW injections<br/>+ GWOSC event list (vetoes)"]
-        SEG["segments.py<br/>good network time, ≥ 32 s stretches<br/>→ segments_HL.json"]
-        SRC{"sources.order"}
-        GW["gwosc: fetch_open_data<br/>16 kHz (or 4 kHz)"]
-        FR["frames: TimeSeries.get<br/>on a LIGO/Virgo cluster"]
-        DEC["decimate to 2048 Hz"]
-        CACHE[("cache: float32 .npy pieces<br/>+ .json provenance")]
-        DQ --> SEG --> SRC
-        SRC -->|first| GW --> DEC
-        SRC -->|if gwosc fails| FR --> DEC
-        DEC -->|"download.sub (HTCondor)"| CACHE
+        direction LR
+        DQ["DQ flags<br/>event vetoes"] --> SEG["segments"] --> SRC{"source"}
+        SRC -->|gwosc| DEC["decimate<br/>2048 Hz"]
+        SRC -->|frames| DEC
+        DEC --> CACHE[("cache")]
     end
-
-    subgraph fly["Every batch: DataLoader workers (CPU, no network)"]
-        direction TB
-        SPLIT["split: gps_blocks or random"]
-        WIN["draw a 32 s window per example where every detector is cached:<br/>uniform, or centred on a tagged real glitch"]
-        PSD["PSD from the window itself<br/>(median Welch)"]
-        BBH["BBH: SAGE waveform, sidereal time<br/>of the window's GPS · signal.fraction"]
-        GL["glitches: analytic + McGAN<br/>at their SNR · probability or null"]
-        SUM["real strain + BBH + glitches"]
-        WH["whiten (fir or fiducial)<br/>crop the 4 s stored window"]
-        OUT["batch: x, signal, glitch, y, snr,<br/>params, gps, sources, tags, asd"]
-        SPLIT --> WIN --> PSD
-        PSD --> BBH --> SUM
-        PSD --> GL --> SUM
-        WIN --> SUM
-        SUM --> WH --> OUT
-        PSD -.->|ASD| WH
+    subgraph fly["Every batch (CPU workers)"]
+        direction LR
+        WIN["window<br/>uniform · real glitch"] --> PSD["PSD"] --> INJ["+ BBH<br/>+ glitches"] --> WH["whiten<br/>crop 4 s"] --> OUT["batch"]
     end
-
-    SEG --> SPLIT
-    CACHE --> WIN
-    OUT --> INP["main process, GPU: QTransforms<br/>timeseries · qscan · tiles"] --> TRAIN["training"]
+    subgraph gpu["Training (GPU)"]
+        direction LR
+        QT["Q-transform"] --> TRAIN["train"]
+    end
+    once --> fly --> gpu
 ```
 
-The top lane runs once: it finds the usable time from data-quality flags alone, then downloads and decimates the
-strain into the cache. The bottom lane runs for every batch and reads only the cache.
+Once: usable time from data-quality flags, then the strain downloaded and decimated into the cache. Every batch:
+read only the cache, inject, whiten. On the GPU: model inputs and training.
 
 ## Steps
 
