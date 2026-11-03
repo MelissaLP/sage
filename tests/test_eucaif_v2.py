@@ -1,4 +1,4 @@
-"""Tests for eucaif/eucaif_v2.py: H1/L1 noise + BBH + O3a analytic glitches, on the fly and stored."""
+"""Tests for eucaif/v2/eucaif_v2.py: H1/L1 noise + BBH + O3a analytic glitches, on the fly and stored."""
 
 from pathlib import Path
 
@@ -9,9 +9,9 @@ import torch
 pytest.importorskip("pycbc")          # analytic ASDs and the v1 waveform stack
 h5py = pytest.importorskip("h5py")
 
-from eucaif.eucaif_v2 import EucaifV2OnTheFly, QTransforms, load_config, make_generator
+from eucaif.v2.eucaif_v2 import EucaifV2OnTheFly, QTransforms, load_config, make_generator
 
-CONFIG = Path(__file__).resolve().parents[1] / "eucaif" / "eucaif_v2.yaml"
+CONFIG = Path(__file__).resolve().parents[1] / "eucaif" / "v2" / "eucaif_v2.yaml"
 
 
 def test_generator_mixes_noise_bbh_and_glitches():
@@ -71,11 +71,11 @@ def test_qtransforms_inputs_helper_and_v3_config():
     with pytest.raises(ValueError, match="not in"):
         qt.inputs(x, ["spectrogram"])
     from eucaif.v3.generator import load_config as load_v3
-    assert QTransforms(load_v3("eucaif/eucaif_v3.yaml")).qscan(x).shape == (3, 2, 256, 256)
+    assert QTransforms(load_v3("eucaif/v3/eucaif_v3.yaml")).qscan(x).shape == (3, 2, 256, 256)
 
 
 def test_written_file(tmp_path):
-    from make_whitened_examples import write_dataset
+    from eucaif.v1.make_whitened_examples import write_dataset
     gen = make_generator(CONFIG, seed=2)
     write_dataset(gen, tmp_path / "v2.h5", n_per_class=3, chunk_per_class=2)
     with h5py.File(tmp_path / "v2.h5", "r") as f:

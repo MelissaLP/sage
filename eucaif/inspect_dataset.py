@@ -170,10 +170,10 @@ def example(f, i, fig=None):
     import matplotlib.pyplot as plt
     import torch
     import yaml
-    from eucaif.eucaif_v2 import QTransforms
+    from eucaif.v2.eucaif_v2 import QTransforms
     s0, s1 = _frame_slice(f)
     qcfg = dict(data=dict(sample_rate=fs, q_padding=s0 / fs, frame_length=(s1 - s0) / fs),
-                qtransform=yaml.safe_load((Path(__file__).parent / "eucaif_v2.yaml").read_text())["qtransform"])
+                qtransform=yaml.safe_load((Path(__file__).parent / "v2" / "eucaif_v2.yaml").read_text())["qtransform"])
     if s0 + s1 != L:
         raise SystemExit("the frame is not centred in the stored window; no Q-scan")
     qt = QTransforms(qcfg)

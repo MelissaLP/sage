@@ -3,17 +3,17 @@
 v3 replaces v2's Gaussian noise with **real H1/L1 strain** (O3a, O3b, O4a). Each example still has an optional
 binary black hole and optional analytic glitches. The strain is downloaded once into a local cache. Training then
 reads it on the fly, never touching the network. Every example keeps the GPS time and source of its data.
-Everything is set in `eucaif/eucaif_v3.yaml`.
+Everything is set in `eucaif/v3/eucaif_v3.yaml`.
 
 Run from the SAGE repo root with `PYTHONPATH=.` in the `eucaif/environment.yml` environment (gwpy ≥ 4).
 Version: v3.0 (tag `eucaif-dataset-v3.0`).
 
-![EuCAIF v3 example](../figures/eucaif_v3_example.png)
+![EuCAIF v3 example](figures/eucaif_v3_example.png)
 
 A noise-only and a BBH example (network SNR 19.9) in real H1 O3a data: Q-scans of the 2 s frame (top) and the
 whitened time series (bottom). Blue: the injected BBH; orange: the injected glitches. The background is real, so
 it can also hold real glitches that are not labelled. Made by
-`python eucaif/example_eucaif_v3.py --detectors H1 --out eucaif/figures/eucaif_v3_example.png` on a partial
+`python eucaif/v3/example_eucaif_v3.py --detectors H1 --out eucaif/v3/figures/eucaif_v3_example.png` on a partial
 H1 cache.
 
 ## What changes from v2
@@ -80,11 +80,11 @@ strain into the cache. The bottom lane runs for every batch and reads only the c
 1. **Segments** (done for H1+L1: `eucaif/v3/segments_HL.json`). Good time comes from GWOSC's data-quality flags
    only, with no strain downloaded:
 
-       python -m eucaif.v3.segments eucaif/eucaif_v3.yaml --out eucaif/v3/segments_HL.json
+       python -m eucaif.v3.segments eucaif/v3/eucaif_v3.yaml --out eucaif/v3/segments_HL.json
 
 2. **Download** the strain into the cache, once, as a batch job:
 
-       python -m eucaif.v3.sources download eucaif/eucaif_v3.yaml --dry-run    # how many files, how many GB
+       python -m eucaif.v3.sources download eucaif/v3/eucaif_v3.yaml --dry-run    # how many files, how many GB
        mkdir -p logs/v3_download && condor_submit eucaif/v3/download.sub      # 100 HTCondor jobs
 
    Put `cache.directory` on shared disk first. Jobs skip what is already cached, so failed jobs can simply be
@@ -185,7 +185,7 @@ Every example can be regenerated exactly, and compared with itself without a com
 ```python
 from eucaif.v3.generator import EucaifV3, load_config, without
 
-gen = EucaifV3(load_config("eucaif/eucaif_v3.yaml"), split="test", seed=0)
+gen = EucaifV3(load_config("eucaif/v3/eucaif_v3.yaml"), split="test", seed=0)
 b = gen.batch(64, key=(0, 0))
 clean = without(b, "glitch")              # pairs: model(b["x"]) vs model(clean) isolates the glitches' effect
 again = gen.replay(b["recipes"][17])      # example 17, regenerated
@@ -199,10 +199,10 @@ be used inside workers: forked processes cannot initialise it, and spawned ones 
 and memory.
 
 ```python
-from eucaif.eucaif_v2 import QTransforms
+from eucaif.v2.eucaif_v2 import QTransforms
 from eucaif.v3.dataset import make_loader
 
-loader = make_loader("eucaif/eucaif_v3.yaml", split="train", batch_size=64, num_workers=4, pin_memory=True,
+loader = make_loader("eucaif/v3/eucaif_v3.yaml", split="train", batch_size=64, num_workers=4, pin_memory=True,
                      overrides={"signal": {"fraction": 0.5}})     # e.g. {"signal": {"fraction": 0}, "glitches": None}
 qt = QTransforms(loader.dataset.cfg, device="cuda")              # the YAML's qtransform settings, on the GPU
 for epoch in range(10):
@@ -219,12 +219,12 @@ for epoch in range(10):
 | `qscan` (`qt.qscan(x)`) | (B, D, 256, 256) | gwpy-exact Q-scan image of the frame (time × frequency) |
 | `tiles` (`qt.tiles(x)`) | {5.7: (B, D, 22, 8192), 45.3: (B, D, 183, 1024)} complex | invertible Q-tiles, one entry per Q |
 
-![EuCAIF v3 model inputs](../figures/eucaif_v3_model_inputs.png)
+![EuCAIF v3 model inputs](figures/eucaif_v3_model_inputs.png)
 
 The `timeseries` and `qscan` inputs of a noise-only and a BBH example (network SNR 19.9) in real H1 O3a data,
 with the injected BBH (blue) and glitches (orange) whitened alone. The noise-only example also holds an injected
 low-frequency glitch (the band near 30 Hz). Made from a partial H1 cache by
-`python eucaif/example_model_inputs.py v3 --seed 4 --detectors H1 --out eucaif/figures/eucaif_v3_model_inputs.png`.
+`python eucaif/examples/example_model_inputs.py v3 --seed 4 --detectors H1 --out eucaif/v3/figures/eucaif_v3_model_inputs.png`.
 
 - **No network access:** the loader reads only the cache.
 - **Partial downloads work:** windows are drawn only where the cache has data for every detector; the log says
@@ -263,7 +263,7 @@ The 2 s frame is `x[..., 2048:6144]`. The extra 1 s on each side is for Q-transf
 
 | File | What |
 |---|---|
-| `eucaif/eucaif_v3.yaml` | the config |
+| `eucaif/v3/eucaif_v3.yaml` | the config |
 | `v3/segments.py` | good time, event vetoes, splits, window sampling, Gravity Spy tags |
 | `v3/sources.py` | GWOSC / frames, decimation, the cache, the `download` command |
 | `v3/download.sub` | HTCondor job for the download |

@@ -1,6 +1,6 @@
 # HTCondor: download the strain of a EuCAIF v3 network into its cache, in N parallel jobs.
-#   1. build the segments:   PYTHONPATH=. python -m eucaif.v3.segments eucaif/eucaif_v3.yaml --out eucaif/v3/segments_HL.json
-#   2. check the size:       PYTHONPATH=. python -m eucaif.v3.sources download eucaif/eucaif_v3.yaml --dry-run
+#   1. build the segments:   PYTHONPATH=. python -m eucaif.v3.segments eucaif/v3/eucaif_v3.yaml --out eucaif/v3/segments_HL.json
+#   2. check the size:       PYTHONPATH=. python -m eucaif.v3.sources download eucaif/v3/eucaif_v3.yaml --dry-run
 #   3. from the SAGE repo root, with cache.directory in the YAML on shared disk:
 #                            mkdir -p logs/v3_download && condor_submit eucaif/v3/download.sub
 # Jobs skip pieces already in the cache, so a failed job can simply be resubmitted.
@@ -10,7 +10,7 @@ N            = 100
 universe     = vanilla
 getenv       = True
 executable   = /usr/bin/env
-arguments    = PYTHONPATH=$ENV(PWD) python -m eucaif.v3.sources download eucaif/eucaif_v3.yaml --parts $(N) --part $(Process)
+arguments    = PYTHONPATH=$ENV(PWD) python -m eucaif.v3.sources download eucaif/v3/eucaif_v3.yaml --parts $(N) --part $(Process)
 initialdir   = $ENV(PWD)
 output       = logs/v3_download/part_$(Process).out
 error        = logs/v3_download/part_$(Process).err

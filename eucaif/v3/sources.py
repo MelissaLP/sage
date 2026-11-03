@@ -28,8 +28,8 @@ network's segments need, once each, and is split into parts for a batch system (
 ``eucaif/v3/download.sub``); training then reads only the cache (a missing piece is an error, unless
 ``cache.fetch_missing`` is true):
 
-    PYTHONPATH=. python -m eucaif.v3.sources download eucaif/eucaif_v3.yaml --dry-run          # files and GB
-    PYTHONPATH=. python -m eucaif.v3.sources download eucaif/eucaif_v3.yaml --parts 100 --part 7
+    PYTHONPATH=. python -m eucaif.v3.sources download eucaif/v3/eucaif_v3.yaml --dry-run          # files and GB
+    PYTHONPATH=. python -m eucaif.v3.sources download eucaif/v3/eucaif_v3.yaml --parts 100 --part 7
 
     cache = StrainCache.from_config(cfg)          # cfg: the v3 YAML
     x, gps0, prov = cache.window("H1", t0, 32.0, segment)   # (n,) float64, GPS of x[0], provenance per piece

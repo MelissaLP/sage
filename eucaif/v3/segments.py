@@ -26,7 +26,7 @@ never certified glitch-free.
 
 Command line (writes the segments JSON of a v3 config):
 
-    PYTHONPATH=. python -m eucaif.v3.segments eucaif/eucaif_v3.yaml --out eucaif/v3/segments_HL.json
+    PYTHONPATH=. python -m eucaif.v3.segments eucaif/v3/eucaif_v3.yaml --out eucaif/v3/segments_HL.json
 """
 
 import argparse

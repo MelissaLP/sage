@@ -38,7 +38,7 @@ def config(tmp_path_factory):
     for det in ("H1", "L1"):
         for lo, hi in cache.pieces(*SEG, SEG):
             cache.piece(det, lo, hi, SEG)
-    cfg = copy.deepcopy(load_config("eucaif/eucaif_v3.yaml"))
+    cfg = copy.deepcopy(load_config("eucaif/v3/eucaif_v3.yaml"))
     S.save(dict(detectors=["H1", "L1"], segments={"O3a": [SEG]}), tmp / "seg.json")
     cfg["segments"]["file"] = str(tmp / "seg.json")
     cfg["cache"] = dict(directory=str(tmp / "cache"), chunk_seconds=CHUNK, fetch_missing=True)

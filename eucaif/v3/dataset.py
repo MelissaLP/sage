@@ -4,7 +4,7 @@ On-the-fly EuCAIF v3 training data: a torch ``IterableDataset`` that reads real 
 the config asks (``signal.fraction: 0`` and ``glitches: null`` give real noise alone).
 
     from eucaif.v3.dataset import make_loader
-    loader = make_loader("eucaif/eucaif_v3.yaml", split="train", batch_size=64, num_workers=4)
+    loader = make_loader("eucaif/v3/eucaif_v3.yaml", split="train", batch_size=64, num_workers=4)
     for epoch in range(10):
         loader.dataset.set_epoch(epoch)
         for b in loader:          # b["x"]: (64, D, L) float32 whitened; b["y"], b["gps"], b["glitch_events"], ...

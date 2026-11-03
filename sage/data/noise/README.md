@@ -35,4 +35,4 @@ All of them are injected by `GlitchInjector` (`glitch_noise.py`), which sets the
 
 All analytic shapes (the McGAN, scattered-light and Antiglitch rows) are in `analytic_glitches.py`, with one interface; the differences from each original are listed in its docstring and in `gengli_glitches.py`'s.
 
-Rates and populations: `GlitchPopulation` (`glitch_population.py`) reads GWForge-style configs; `eucaif/sage_analytic_glitches.yaml` has O3a Gravity Spy rates computed with GWForge's method (`eucaif/gravityspy_o3a_rates.py`).
+Rates and populations: `GlitchPopulation` (`glitch_population.py`) reads GWForge-style configs; `eucaif/v2/sage_analytic_glitches.yaml` has O3a Gravity Spy rates computed with GWForge's method (`eucaif/v2/gravityspy_o3a_rates.py`).

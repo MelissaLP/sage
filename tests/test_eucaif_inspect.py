@@ -9,14 +9,14 @@ pytest.importorskip("pycbc")
 h5py = pytest.importorskip("h5py")
 
 from eucaif import inspect_dataset as ins                              # noqa: E402
-from eucaif.eucaif_v2 import make_generator                            # noqa: E402
+from eucaif.v2.eucaif_v2 import make_generator                            # noqa: E402
 
-CONFIG = Path(__file__).resolve().parents[1] / "eucaif" / "eucaif_v2.yaml"
+CONFIG = Path(__file__).resolve().parents[1] / "eucaif" / "v2" / "eucaif_v2.yaml"
 
 
 @pytest.fixture(scope="module")
 def v2_file(tmp_path_factory):
-    from eucaif.make_whitened_examples import write_dataset
+    from eucaif.v1.make_whitened_examples import write_dataset
     path = tmp_path_factory.mktemp("inspect") / "v2.h5"
     write_dataset(make_generator(CONFIG, seed=2), path, n_per_class=4, chunk_per_class=4)
     return path

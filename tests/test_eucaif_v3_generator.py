@@ -35,7 +35,7 @@ class ColouredNoise(SRC.Source):
 
 
 def _generator(tmp_path, seed=0, **changes):
-    cfg = load_config("eucaif/eucaif_v3.yaml")
+    cfg = load_config("eucaif/v3/eucaif_v3.yaml")
     cfg = copy.deepcopy(cfg)
     S.save(dict(detectors=["H1", "L1"], segments={"O3a": [SEG]}), tmp_path / "seg.json")
     cfg["segments"]["file"] = str(tmp_path / "seg.json")
@@ -83,7 +83,7 @@ def test_exclude_centre_psd(tmp_path):
 
 def test_network_population_keeps_only_the_network_detectors(tmp_path):
     from eucaif.v3.generator import _network_population
-    cfg = load_config("eucaif/eucaif_v3.yaml")
+    cfg = load_config("eucaif/v3/eucaif_v3.yaml")
     cfg["data"]["detectors"] = ["H1"]
     import yaml
     pop = yaml.safe_load(_network_population(cfg, tmp_path).read_text())

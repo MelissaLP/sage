@@ -11,9 +11,9 @@ Documentation:
 
     Modelled on GWForge's glitch configuration (https://github.com/koustavchandra/gwforge,
     ``GWForge/glitch``): each class has a rate per hour per detector, parameter ranges and a
-    power-law SNR distribution. See ``eucaif/sage_analytic_glitches.yaml`` for the format.
+    power-law SNR distribution. See ``eucaif/v2/sage_analytic_glitches.yaml`` for the format.
 
-        pop = GlitchPopulation("eucaif/sage_analytic_glitches.yaml")
+        pop = GlitchPopulation("eucaif/v2/sage_analytic_glitches.yaml")
         strain, events = pop.inject(strain, asd, generator=g)       # strain: (D, T) or (B, D, T)
 
     As in GWForge:

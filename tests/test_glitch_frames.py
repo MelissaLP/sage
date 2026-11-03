@@ -1,4 +1,4 @@
-"""Tests for eucaif/glitch_frames.py: on-the-fly and stored glitch frames in the same format."""
+"""Tests for eucaif/glitch_frames/glitch_frames.py: on-the-fly and stored glitch frames in the same format."""
 
 from pathlib import Path
 
@@ -9,11 +9,11 @@ import torch
 h5py = pytest.importorskip("h5py")
 pytest.importorskip("pycbc")                 # the analytic ASDs (and provenance) come from PyCBC
 
-from eucaif.glitch_frames import GlitchFramesOnTheFly, StoredGlitchFrames, frame_columns
-from eucaif.make_glitch_dataset import GlitchDatasetGenerator
+from eucaif.glitch_frames.glitch_frames import GlitchFramesOnTheFly, StoredGlitchFrames, frame_columns
+from eucaif.glitch_frames.make_glitch_dataset import GlitchDatasetGenerator
 from sage.dsp.qtransform import QTransform
 
-CONFIG = Path(__file__).resolve().parents[1] / "eucaif" / "sage_analytic_glitches_dense.yaml"
+CONFIG = Path(__file__).resolve().parents[1] / "eucaif" / "glitch_frames" / "sage_analytic_glitches_dense.yaml"
 
 
 def test_on_the_fly_is_reproducible_per_epoch_and_batch():
@@ -32,7 +32,7 @@ def test_on_the_fly_is_reproducible_per_epoch_and_batch():
 
 
 def test_stored_frames_round_trip(tmp_path):
-    from eucaif.make_glitch_dataset import write_dataset
+    from eucaif.glitch_frames.make_glitch_dataset import write_dataset
     gen = GlitchDatasetGenerator(CONFIG, seed=3)
     path = write_dataset(gen, tmp_path / "frames.h5", n_frames=5, chunk=2)
     ds = StoredGlitchFrames(path)

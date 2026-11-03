@@ -35,7 +35,7 @@ import numpy as np
 import torch
 import yaml
 
-from eucaif.eucaif_v2 import _populations, _prior_with_tc, _register
+from eucaif.v2.eucaif_v2 import _populations, _prior_with_tc, _register
 from eucaif.v3 import segments as S
 from eucaif.v3.sources import StrainCache
 from eucaif.v3.whitening import make_whitener
