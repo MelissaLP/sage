@@ -5,7 +5,7 @@ the median- and with the mean-averaged (Welch) PSD. One HDF5 file per average (R
     PYTHONPATH=. python -m eucaif.vigilant.prep parts CSV --chunk 1500             # number of jobs
     PYTHONPATH=. python -m eucaif.vigilant.prep run   CSV OUT --chunk 1500 --part 0
     PYTHONPATH=. python -m eucaif.vigilant.prep merge CSV OUT --chunk 1500 --tar virgo_glitches.tar
-    PYTHONPATH=. python -m eucaif.vigilant.prep dag   CSV OUT --chunk 1500 --accounting-group GROUP   # HTCondor
+    PYTHONPATH=. python -m eucaif.vigilant.prep dag   CSV OUT --chunk 1500                            # HTCondor
 
 run does the rows [part * chunk, (part + 1) * chunk) of the CSV into OUT/parts/ and skips a part whose files are
 already there, so a failed job can simply be resubmitted. merge joins the parts in CSV order into
@@ -235,7 +235,8 @@ def main(argv=None):
     p.add_argument("--part", type=int, default=0, help="which part to do (run): rows part * chunk ...")
     p.add_argument("--tar", help="merge: also write this tar of the merged files and README.md, in OUT "
                                  "(dag: default virgo_glitches.tar)")
-    p.add_argument("--accounting-group", help="dag: HTCondor accounting_group (needed on LIGO clusters)")
+    p.add_argument("--accounting-group", default="ligo.dev.o4.detchar.glitch_classification.lib",
+                   help="dag: HTCondor accounting_group (default: %(default)s)")
     args = p.parse_args(argv)
     df = pd.read_csv(args.csv)
     parts = n_parts(len(df), args.chunk)
@@ -245,8 +246,6 @@ def main(argv=None):
     if args.out is None:
         p.error(f"{args.command} needs OUT")
     if args.command == "dag":
-        if not args.accounting_group:
-            p.error("dag needs --accounting-group")
         write_dag(args.csv, args.out, parts, args.chunk, args.accounting_group, args.tar or "virgo_glitches.tar")
         return
     if args.command == "run":

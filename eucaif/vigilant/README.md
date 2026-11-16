@@ -79,7 +79,7 @@ From the SAGE repo root, in a shell with the SAGE environment active (the jobs i
 
 ```bash
 CSV=eucaif/vigilant/O3b_vigilant_train_set.csv; OUT=/path/on/shared/disk/vigilant
-PYTHONPATH=. python -m eucaif.vigilant.prep dag $CSV $OUT --chunk 1500 --accounting-group <your group>
+PYTHONPATH=. python -m eucaif.vigilant.prep dag $CSV $OUT --chunk 1500   # accounting group ligo.dev.o4.detchar.glitch_classification.lib
 condor_submit_dag $OUT/vigilant.dag
 ```
 
