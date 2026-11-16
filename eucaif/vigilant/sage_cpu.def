@@ -8,9 +8,11 @@ Bootstrap: docker
 From: condaforge/miniforge3:24.11.3-0
 
 %post
+    # torch from conda-forge (CPU build), not pip: pip's wheel loads the base image's libstdc++, too old for
+    # conda's numpy (GLIBCXX_3.4.29 not found); from conda everything uses the env's own libstdc++
     conda create -y -p /opt/conda/envs/sage -c conda-forge python=3.11 "numpy>=1.24,<2.4" "scipy>=1.10,<1.17" \
-        "pandas>=2.0" "h5py>=3.8" tqdm "gwpy>=4" python-framel gwdatafind igwn-auth-utils
-    /opt/conda/envs/sage/bin/pip install --no-cache-dir "torch>=2.1,<2.11" --index-url https://download.pytorch.org/whl/cpu
+        "pandas>=2.0" "h5py>=3.8" tqdm "gwpy>=4" python-framel gwdatafind igwn-auth-utils \
+        "pytorch[version='>=2.1,<2.11',build=cpu_generic*]"   # cpu_generic: OpenBLAS, not MKL (~0.7 GB smaller)
     conda clean -afy
 
 %environment
@@ -18,4 +20,4 @@ From: condaforge/miniforge3:24.11.3-0
     export LC_ALL=C
 
 %test
-    /opt/conda/envs/sage/bin/python -c "import torch, gwpy, h5py, pandas, framel; print('ok', torch.__version__, gwpy.__version__)"
+    /opt/conda/envs/sage/bin/python -c "import torch, numpy, gwpy, h5py, pandas, framel; x = torch.from_numpy(numpy.random.default_rng(0).standard_normal(4096)); print('ok', torch.__version__, numpy.__version__, gwpy.__version__, float(torch.fft.rfft(x).abs().median()))"
