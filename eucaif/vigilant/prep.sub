@@ -1,0 +1,18 @@
+# HTCondor: one part of the Vigilant glitches (eucaif/vigilant/prep.py run), a node of OUT/vigilant.dag.
+# Don't submit this directly: write the DAG with `prep.py dag` (it sets repo, csv, out, chunk, part,
+# acct = accounting group) and submit that, from a shell with the SAGE environment active (getenv).
+
+universe       = vanilla
+getenv         = True
+executable     = /usr/bin/env
+arguments      = "PYTHONPATH=$(repo) OMP_NUM_THREADS=1 python -m eucaif.vigilant.prep run $(csv) $(out) --chunk $(chunk) --part $(part)"
+initialdir     = $(repo)
+output         = $(out)/logs/part_$(part).out
+error          = $(out)/logs/part_$(part).err
+log            = $(out)/logs/vigilant.log
+request_cpus   = 1
+request_memory = 4 GB
+request_disk   = 1 GB
+accounting_group      = $(acct)
+accounting_group_user = $ENV(USER)
+queue

@@ -1,0 +1,17 @@
+# HTCondor: join the parts into OUT/virgo_glitches_{median,welch}.h5 and the tar (eucaif/vigilant/prep.py merge),
+# the last node of OUT/vigilant.dag, after all parts.
+
+universe       = vanilla
+getenv         = True
+executable     = /usr/bin/env
+arguments      = "PYTHONPATH=$(repo) OMP_NUM_THREADS=1 python -m eucaif.vigilant.prep merge $(csv) $(out) --chunk $(chunk) --tar $(tar)"
+initialdir     = $(repo)
+output         = $(out)/logs/merge.out
+error          = $(out)/logs/merge.err
+log            = $(out)/logs/vigilant.log
+request_cpus   = 1
+request_memory = 4 GB
+request_disk   = 1 GB
+accounting_group      = $(acct)
+accounting_group_user = $ENV(USER)
+queue
