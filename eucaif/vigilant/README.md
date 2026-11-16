@@ -75,19 +75,34 @@ Given the same data, steps 2 and 3 match gwpy to ~1e-11.
 
 ## HTCondor
 
-From the SAGE repo root, in a shell with the SAGE environment active (the jobs inherit it):
+The jobs run in a container (`universe = container`, as the anomalydetection CIT pipeline), at CIT where the frames
+are. The image (`sage_cpu.def`: Python 3.11, CPU torch, gwpy, h5py, a frame reader) holds no SAGE: each job gets
+SAGE's `sage/`, `prep.py` and the CSV in its sandbox, so code changes need no rebuild. The old `anomaly` image is
+Python 3.9, which SAGE does not run on.
+
+Once, build the image and put it on OSDF (on a CIT login node, with a token as in anomalydetection's
+`running_on_condor.md`):
+
+```bash
+apptainer build sage_cpu.sif eucaif/vigilant/sage_cpu.def
+htgettoken -v -a vault.ligo.org -i igwn --scopes "read:/staging write:/staging"
+pelican object put sage_cpu.sif osdf:///igwn/cit/staging/$USER/sage_cpu.sif
+```
+
+Then, from the SAGE repo root, in a shell with h5py and pandas (e.g. `conda activate igwn`; the merge runs there):
 
 ```bash
 CSV=eucaif/vigilant/O3b_vigilant_train_set.csv; OUT=/path/on/shared/disk/vigilant
-PYTHONPATH=. python -m eucaif.vigilant.prep dag $CSV $OUT --chunk 1500   # accounting group ligo.dev.o4.detchar.glitch_classification.lib
+PYTHONPATH=. python -m eucaif.vigilant.prep dag $CSV $OUT --chunk 1500   # --image osdf:///.../sage_cpu.sif if not melissa.lopez's
 condor_submit_dag $OUT/vigilant.dag
 ```
 
-- One job per `--chunk` glitches (`prep.sub`) writes `OUT/parts/`; when all are done, `merge.sub` joins them, in CSV
-  order, into `OUT/virgo_glitches_{median,welch}.h5` and writes `OUT/virgo_glitches.tar` (both files and this README,
-  uncompressed: whitened noise does not compress).
+- One container job per `--chunk` glitches (`prep.sub`) sends its two files back to `OUT/parts/`. When all are
+  done, `merge.sub` (on the submit machine) joins them, in CSV order, into `OUT/virgo_glitches_{median,welch}.h5`
+  and writes `OUT/virgo_glitches.tar` (both files and this README, uncompressed: whitened noise does not compress).
+- Accounting group: `ligo.dev.o4.detchar.glitch_classification.lib` (`--accounting-group` to change it).
 - Pick `--chunk` for ~0.5 h per job: 1800 s / (seconds per sample), printed at the end of each part's log
-  (`OUT/logs/part_*.out`). `prep.py parts $CSV --chunk N` prints the number of jobs.
-- A part whose files exist is skipped, so a failed DAG can be resubmitted (`condor_submit_dag` uses the rescue DAG)
-  without redoing finished parts. Each part is retried twice.
+  (`OUT/logs/part_*.out`). Try a small CSV first (e.g. `head -21 $CSV > test.csv`, `--chunk 10`: 2 jobs).
+- Each part is retried twice. After a failure, run `prep.py dag` again: it leaves out the parts already in
+  `OUT/parts/`; then `condor_submit_dag -force $OUT/vigilant.dag`.
 - Disk: parts, merged files and tar each take ~57 GB for 12k glitches; the parts can be deleted after the merge.

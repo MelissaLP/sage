@@ -5,14 +5,17 @@ the median- and with the mean-averaged (Welch) PSD. One HDF5 file per average (R
     PYTHONPATH=. python -m eucaif.vigilant.prep parts CSV --chunk 1500             # number of jobs
     PYTHONPATH=. python -m eucaif.vigilant.prep run   CSV OUT --chunk 1500 --part 0
     PYTHONPATH=. python -m eucaif.vigilant.prep merge CSV OUT --chunk 1500 --tar virgo_glitches.tar
-    PYTHONPATH=. python -m eucaif.vigilant.prep dag   CSV OUT --chunk 1500                            # HTCondor
+    PYTHONPATH=. python -m eucaif.vigilant.prep dag   CSV OUT --chunk 1500 --image IMAGE              # HTCondor
 
 run does the rows [part * chunk, (part + 1) * chunk) of the CSV into OUT/parts/ and skips a part whose files are
-already there, so a failed job can simply be resubmitted. merge joins the parts in CSV order into
-OUT/virgo_glitches_{median,welch}.h5 and, with --tar, puts both and README.md in OUT/<tar> (uncompressed: whitened
-noise does not compress). dag writes OUT/vigilant.dag: one job per part (prep.sub), then merge (merge.sub).
+already there. merge joins the parts in CSV order into OUT/virgo_glitches_{median,welch}.h5 and, with --tar, puts
+both and README.md in OUT/<tar> (uncompressed: whitened noise does not compress). dag writes OUT/vigilant.dag: one
+container job per part not yet in OUT/parts (prep.sub), then merge on the submit machine (merge.sub); so after a
+failure, run dag again and resubmit. Only run needs torch, gwpy and SAGE (imported there): merge, parts and dag need
+h5py and pandas.
 """
 import argparse
+import os
 import subprocess
 import tarfile
 import time
@@ -21,16 +24,13 @@ from pathlib import Path
 import h5py
 import numpy as np
 import pandas as pd
-import torch
-from gwpy.timeseries import TimeSeries
 
-from sage.dsp.welch import TorchWelch
-from sage.dsp.whiten import FIRWhitening
-
-ROOT = Path(__file__).resolve().parents[2]                     # the SAGE repo
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent.parent                                      # the SAGE repo (in a job's sandbox: not a repo)
 CHANNEL, FRAMETYPE = "V1:Hrec_hoft_16384Hz", "HoftOnline"
 AVERAGES = {"median": "median", "welch": "mean"}   # file tag -> TorchWelch avg_method (gwpy's method="median" / "welch")
 COLUMNS = ["GPStime", "snr", "confidence", "label", "new_label"]   # CSV columns kept as metadata
+DEFAULT_IMAGE = "osdf:///igwn/cit/staging/melissa.lopez/sage_cpu.sif"   # sage_cpu.def, uploaded as in README.md
 
 
 def generate_data(start, end, highpass=10, keep=32):
@@ -41,6 +41,11 @@ def generate_data(start, end, highpass=10, keep=32):
         fs, out = generate_data(t0 - 32, t0 + 32)     # 64 s fetched -> 32 s centred on t0
         white, f, psd = out["median"]
     """
+    import torch
+    from gwpy.timeseries import TimeSeries
+    from sage.dsp.welch import TorchWelch
+    from sage.dsp.whiten import FIRWhitening
+
     data = TimeSeries.get(CHANNEL, start, end, frametype=FRAMETYPE)
     fs = int(data.sample_rate.value)
     x = torch.tensor(data.value, dtype=torch.float64)
@@ -106,8 +111,7 @@ def save_glitches(df, out_dir, n=None, total=64, keep=32, highpass=10, name="vir
         if not rows:
             raise RuntimeError("no glitch could be processed")
         meta = df.loc[rows]
-        commit = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
-                                capture_output=True, text=True).stdout.strip()
+        commit = sage_commit()
         for tag, avg in AVERAGES.items():
             h = files[tag]
             g = h.create_group("metadata")
@@ -135,6 +139,17 @@ def save_glitches(df, out_dir, n=None, total=64, keep=32, highpass=10, name="vir
     var = s.var(ddof=1) if s.size > 1 else 0.0
     print(f"time per sample ({s.size} samples): mean {s.mean():.3f} s, variance {var:.3g} s^2 (std {var ** 0.5:.3f} s), "
           f"min {s.min():.3f} s, max {s.max():.3f} s", flush=True)
+
+
+def sage_commit():
+    """The SAGE commit: SAGE_COMMIT (set by the DAG, as a job's sandbox is not a repo) or git."""
+    if os.environ.get("SAGE_COMMIT"):
+        return os.environ["SAGE_COMMIT"]
+    try:
+        return subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
+                              capture_output=True, text=True).stdout.strip()
+    except OSError:                                            # no git (a container)
+        return ""
 
 
 def n_parts(n_rows, chunk):
@@ -205,25 +220,32 @@ def merge(out_dir, parts, name="virgo_glitches", tar=None):
         with tarfile.open(out_dir / tar, "w") as t:
             for p in finals:
                 t.add(p, arcname=p.name)
-            t.add(Path(__file__).with_name("README.md"), arcname="README.md")
+            t.add(HERE / "README.md", arcname="README.md")
         print(f"-> {out_dir / tar}", flush=True)
 
 
-def write_dag(csv, out_dir, parts, chunk, accounting_group, tar, retries=2):
-    """OUT/vigilant.dag: a node per part (prep.sub, retried), then merge.sub once all are done."""
+def write_dag(csv, out_dir, parts, chunk, accounting_group, tar, image, retries=2):
+    """OUT/vigilant.dag: a container job per part not yet in OUT/parts (prep.sub, retried), then merge.sub."""
     out_dir = Path(out_dir).resolve()
-    (out_dir / "logs").mkdir(parents=True, exist_ok=True)
-    here = Path(__file__).resolve().parent
+    for d in ("logs", "parts"):
+        (out_dir / d).mkdir(parents=True, exist_ok=True)
+    done = [k for k in range(parts)
+            if all((out_dir / "parts" / f"{part_name(k)}_{tag}.h5").exists() for tag in AVERAGES)]
+    todo = [k for k in range(parts) if k not in done]
+    disk_gb = int(np.ceil(chunk * 2 * 2.4e-3)) + 2                # a part's two files, ~2.4 MB per glitch each
     common = (f'repo="{ROOT}" csv="{Path(csv).resolve()}" out="{out_dir}" chunk="{chunk}" '
-              f'acct="{accounting_group}"')
+              f'acct="{accounting_group}" commit="{sage_commit()}"')
     lines = []
-    for k in range(parts):
-        lines += [f"JOB part{k} {here / 'prep.sub'}", f'VARS part{k} {common} part="{k}"', f"RETRY part{k} {retries}"]
-    lines += [f"JOB merge {here / 'merge.sub'}", f'VARS merge {common} tar="{tar}"',
-              "PARENT " + " ".join(f"part{k}" for k in range(parts)) + " CHILD merge"]
+    for k in todo:
+        lines += [f"JOB part{k} {HERE / 'prep.sub'}",
+                  f'VARS part{k} {common} part="{k}" image="{image}" disk="{disk_gb}"', f"RETRY part{k} {retries}"]
+    lines += [f"JOB merge {HERE / 'merge.sub'}", f'VARS merge {common} tar="{tar}"']
+    if todo:
+        lines += ["PARENT " + " ".join(f"part{k}" for k in todo) + " CHILD merge"]
     path = out_dir / "vigilant.dag"
     path.write_text("\n".join(lines) + "\n")
-    print(f"-> {path}: {parts} parts of {chunk} glitches, then merge\n   condor_submit_dag {path}")
+    print(f"-> {path}: {len(todo)} of {parts} parts of {chunk} glitches to do ({len(done)} done), then merge\n"
+          f"   condor_submit_dag {path}")
 
 
 def main(argv=None):
@@ -237,6 +259,8 @@ def main(argv=None):
                                  "(dag: default virgo_glitches.tar)")
     p.add_argument("--accounting-group", default="ligo.dev.o4.detchar.glitch_classification.lib",
                    help="dag: HTCondor accounting_group (default: %(default)s)")
+    p.add_argument("--image", default=DEFAULT_IMAGE,
+                   help="dag: the container image of the jobs, built from sage_cpu.def (default: %(default)s)")
     args = p.parse_args(argv)
     df = pd.read_csv(args.csv)
     parts = n_parts(len(df), args.chunk)
@@ -246,7 +270,8 @@ def main(argv=None):
     if args.out is None:
         p.error(f"{args.command} needs OUT")
     if args.command == "dag":
-        write_dag(args.csv, args.out, parts, args.chunk, args.accounting_group, args.tar or "virgo_glitches.tar")
+        write_dag(args.csv, args.out, parts, args.chunk, args.accounting_group, args.tar or "virgo_glitches.tar",
+                  args.image)
         return
     if args.command == "run":
         if not 0 <= args.part < parts:

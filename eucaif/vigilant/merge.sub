@@ -1,17 +1,15 @@
-# HTCondor: join the parts into OUT/virgo_glitches_{median,welch}.h5 and the tar (eucaif/vigilant/prep.py merge),
-# the last node of OUT/vigilant.dag, after all parts.
+# HTCondor: join the parts into OUT/virgo_glitches_{median,welch}.h5 and the tar (prep.py merge), the last node of
+# OUT/vigilant.dag. Runs on the submit machine (local universe), next to the data: ~57 GB read, ~115 GB written for
+# 12k glitches. Needs h5py and pandas only, from the shell condor_submit_dag was run in (getenv), e.g. IGWN conda.
 
-universe       = vanilla
+universe       = local
 getenv         = True
 executable     = /usr/bin/env
-arguments      = "PYTHONPATH=$(repo) OMP_NUM_THREADS=1 python -m eucaif.vigilant.prep merge $(csv) $(out) --chunk $(chunk) --tar $(tar)"
-initialdir     = $(repo)
+arguments      = "OMP_NUM_THREADS=1 python $(repo)/eucaif/vigilant/prep.py merge $(csv) $(out) --chunk $(chunk) --tar $(tar)"
+initialdir     = $(out)
 output         = $(out)/logs/merge.out
 error          = $(out)/logs/merge.err
 log            = $(out)/logs/vigilant.log
-request_cpus   = 1
-request_memory = 4 GB
-request_disk   = 1 GB
 accounting_group      = $(acct)
 accounting_group_user = $ENV(USER)
 queue

@@ -1,0 +1,21 @@
+# Apptainer image for the Vigilant jobs (prep.sub): Python 3.11 with what prep.py run needs, CPU torch and a frame
+# reader. SAGE itself is not installed, the jobs bring their copy of sage/, so the image needs no rebuild when SAGE
+# changes. Build and upload (README.md, "HTCondor"):
+#
+#   apptainer build sage_cpu.sif eucaif/vigilant/sage_cpu.def
+#   pelican object put sage_cpu.sif osdf:///igwn/cit/staging/$USER/sage_cpu.sif
+Bootstrap: docker
+From: condaforge/miniforge3:24.11.3-0
+
+%post
+    conda create -y -p /opt/conda/envs/sage -c conda-forge python=3.11 "numpy>=1.24,<2.4" "scipy>=1.10,<1.17" \
+        "pandas>=2.0" "h5py>=3.8" tqdm "gwpy>=4" python-framel gwdatafind igwn-auth-utils
+    /opt/conda/envs/sage/bin/pip install --no-cache-dir "torch>=2.1,<2.11" --index-url https://download.pytorch.org/whl/cpu
+    conda clean -afy
+
+%environment
+    export PATH=/opt/conda/envs/sage/bin:$PATH
+    export LC_ALL=C
+
+%test
+    /opt/conda/envs/sage/bin/python -c "import torch, gwpy, h5py, pandas, framel; print('ok', torch.__version__, gwpy.__version__)"
