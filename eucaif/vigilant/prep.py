@@ -2,17 +2,17 @@
 prep.py -- whitened Virgo (V1) strain around the glitches of a CSV, at the native 16384 Hz, whitened twice: with
 the median- and with the mean-averaged (Welch) PSD. One HDF5 file per average (README.md has the format).
 
-    PYTHONPATH=. python -m eucaif.vigilant.prep parts CSV --chunk 1500             # number of jobs
-    PYTHONPATH=. python -m eucaif.vigilant.prep run   CSV OUT --chunk 1500 --part 0
-    PYTHONPATH=. python -m eucaif.vigilant.prep merge CSV OUT --chunk 1500 --tar virgo_glitches.tar
-    PYTHONPATH=. python -m eucaif.vigilant.prep dag   CSV OUT --chunk 1500 --image IMAGE              # HTCondor
+    python eucaif/vigilant/prep.py parts CSV --chunk 1500                        # number of jobs
+    python eucaif/vigilant/prep.py dag   CSV OUT --chunk 1500                    # HTCondor: the jobs
+    python eucaif/vigilant/prep.py merge CSV OUT --chunk 1500 --tar virgo_glitches.tar   # when they are done
+    python eucaif/vigilant/prep.py run   CSV OUT --chunk 1500 --part 0           # one part (what a job runs)
 
 run does the rows [part * chunk, (part + 1) * chunk) of the CSV into OUT/parts/ and skips a part whose files are
 already there. merge joins the parts in CSV order into OUT/virgo_glitches_{median,welch}.h5 and, with --tar, puts
 both and README.md in OUT/<tar> (uncompressed: whitened noise does not compress). dag writes OUT/vigilant.dag: one
-container job per part not yet in OUT/parts (prep.sub), then merge on the submit machine (merge.sub); so after a
-failure, run dag again and resubmit. Only run needs torch, gwpy and SAGE (imported there): merge, parts and dag need
-h5py and pandas.
+container job per part not yet in OUT/parts (prep.sub), which gets its inputs and returns its files by HTCondor file
+transfer; so after a failure, run dag again and resubmit. Only run needs torch, gwpy and SAGE (imported there, with
+SAGE from the repo or the job's sandbox): parts, dag and merge need h5py and pandas.
 """
 import argparse
 import os
@@ -227,7 +227,7 @@ def merge(out_dir, parts, name="virgo_glitches", tar=None):
 
 
 def write_dag(csv, out_dir, parts, chunk, accounting_group, tar, image, retries=2):
-    """OUT/vigilant.dag: a container job per part not yet in OUT/parts (prep.sub, retried), then merge.sub."""
+    """OUT/vigilant.dag: a container job per part not yet in OUT/parts (prep.sub, retried)."""
     out_dir = Path(out_dir).resolve()
     for d in ("logs", "parts"):
         (out_dir / d).mkdir(parents=True, exist_ok=True)
@@ -241,13 +241,16 @@ def write_dag(csv, out_dir, parts, chunk, accounting_group, tar, image, retries=
     for k in todo:
         lines += [f"JOB part{k} {HERE / 'prep.sub'}",
                   f'VARS part{k} {common} part="{k}" image="{image}" disk="{disk_gb}"', f"RETRY part{k} {retries}"]
-    lines += [f"JOB merge {HERE / 'merge.sub'}", f'VARS merge {common} tar="{tar}"']
-    if todo:
-        lines += ["PARENT " + " ".join(f"part{k}" for k in todo) + " CHILD merge"]
     path = out_dir / "vigilant.dag"
+    if not todo:
+        print(f"all {parts} parts are in {out_dir / 'parts'}: merge them\n"
+              f"   python {HERE / 'prep.py'} merge {Path(csv).resolve()} {out_dir} --chunk {chunk} --tar {tar}")
+        return
     path.write_text("\n".join(lines) + "\n")
-    print(f"-> {path}: {len(todo)} of {parts} parts of {chunk} glitches to do ({len(done)} done), then merge\n"
-          f"   condor_submit_dag {path}")
+    print(f"-> {path}: {len(todo)} of {parts} parts of {chunk} glitches to do ({len(done)} done)\n"
+          f"   condor_submit_dag {path}\n"
+          f"then, when they are done:\n"
+          f"   python {HERE / 'prep.py'} merge {Path(csv).resolve()} {out_dir} --chunk {chunk} --tar {tar}")
 
 
 def main(argv=None):
