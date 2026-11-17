@@ -1,0 +1,28 @@
+# HTCondor: the final tar (prep.py tar), node tar of OUT/vigilant.dag, in the SAGE container (sage_cpu.def).
+# Written for the DAG: `prep.py dag` sets csv, out, tar, image, acct, commit and disk (GB).
+#
+# in:  prep.py, README.md, the CSV, OUT/virgo_glitches_{median,welch}.h5      out: OUT/<tar>
+
+universe              = container
+container_image       = $(image)
+executable            = /opt/conda/envs/sage/bin/python
+transfer_executable   = False
+arguments             = "prep.py tar $Fnx(csv) . --tar $(tar)"
+environment           = "OMP_NUM_THREADS=1"
+
+should_transfer_files   = YES
+when_to_transfer_output = ON_EXIT
+transfer_input_files    = $(repo)/eucaif/vigilant/prep.py, $(repo)/eucaif/vigilant/README.md, $(csv), $(out)/virgo_glitches_median.h5, $(out)/virgo_glitches_welch.h5
+transfer_output_files   = $(tar)
+initialdir              = $(out)
+
+requirements   = (Arch == "X86_64")
+output         = $(out)/logs/tar.out
+error          = $(out)/logs/tar.err
+log            = $(out)/logs/vigilant.log
+request_cpus   = 1
+request_memory = 2 GB
+request_disk   = $(disk) GB
+accounting_group      = $(acct)
+accounting_group_user = $ENV(USER)
+queue

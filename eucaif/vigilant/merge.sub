@@ -1,0 +1,29 @@
+# HTCondor: join the parts of one average into one file (prep.py merge --average), node merge_<average> of
+# OUT/vigilant.dag, in the SAGE container (sage_cpu.def). Written for the DAG: `prep.py dag` sets csv, out, chunk,
+# average, parts_files (that average's part files), image, acct, commit and disk (GB).
+#
+# in:  prep.py, the CSV, OUT/parts/*_<average>.h5      out: OUT/virgo_glitches_<average>.h5
+
+universe              = container
+container_image       = $(image)
+executable            = /opt/conda/envs/sage/bin/python
+transfer_executable   = False
+arguments             = "prep.py merge $Fnx(csv) . --chunk $(chunk) --average $(average) --parts-dir ."
+environment           = "OMP_NUM_THREADS=1"
+
+should_transfer_files   = YES
+when_to_transfer_output = ON_EXIT
+transfer_input_files    = $(repo)/eucaif/vigilant/prep.py, $(csv), $(parts_files)
+transfer_output_files   = virgo_glitches_$(average).h5
+initialdir              = $(out)
+
+requirements   = (Arch == "X86_64")
+output         = $(out)/logs/merge_$(average).out
+error          = $(out)/logs/merge_$(average).err
+log            = $(out)/logs/vigilant.log
+request_cpus   = 1
+request_memory = 4 GB
+request_disk   = $(disk) GB
+accounting_group      = $(acct)
+accounting_group_user = $ENV(USER)
+queue

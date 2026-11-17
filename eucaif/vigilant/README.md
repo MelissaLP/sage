@@ -77,23 +77,27 @@ Given the same data, steps 2 and 3 match gwpy to ~1e-11.
 
 The jobs run in a container (`universe = container`, as in the anomalydetection CIT pipeline), on any IGWN node
 with the IGWN private data (OSDF, in CVMFS): gwpy's `TimeSeries.get` finds h(t) with `GWDATAFIND_SERVER=datafind.igwn.org`
-and reads it with the job's SciToken (`read:/virgo gwdatafind.read`). They see nothing of your home directory: HTCondor transfers SAGE's `sage/`, `prep.py` and the CSV into
-each job's sandbox, and transfers the job's two files back. The image (`sage_cpu.def`: Python 3.11, CPU torch,
+and reads it with the job's SciToken (`read:/virgo gwdatafind.read`). Every step is a node of one DAG, with its own
+submit file, and every node is a container job that sees nothing of your home directory: HTCondor transfers its
+inputs into the job's sandbox and its outputs back to `OUT`. The image (`sage_cpu.def`: Python 3.11, CPU torch,
 gwpy 4, h5py, a frame reader) holds no SAGE, so code changes need no rebuild. The old `anomaly` image is Python 3.9,
 which SAGE does not run on.
 
 ```
-CSV ── prep.py dag ──> OUT/vigilant.dag
-                          │
-       one container job per --chunk glitches (prep.sub, h(t) from CVMFS, retried twice)
-         in:  sage/, prep.py, the CSV (transfer_input_files)
-         out: OUT/parts/virgo_glitches_partNNN_{median,welch}.h5 (transfer_output_files)
-                          │
-       merge: a node that submits nothing; its PRE script (OUT/merge.sh) runs prep.py merge on the
-       submit machine, with the Python of `prep.py dag`, once every part has succeeded
-                          │
-OUT/virgo_glitches_median.h5, OUT/virgo_glitches_welch.h5, OUT/virgo_glitches.tar (both + this README)
+CSV ── prep.py dag ──> OUT/vigilant.dag                          every node: universe = container, retried twice
+
+part0 … partN      prep.sub    prep.py run      in:  sage/, prep.py, the CSV
+  (one per --chunk glitches)                     out: OUT/parts/virgo_glitches_partNNN_{median,welch}.h5
+        │
+merge_median       merge.sub   prep.py merge    in:  prep.py, the CSV, OUT/parts/*_median.h5
+merge_welch        merge.sub   --average ...    out: OUT/virgo_glitches_{median,welch}.h5
+        │
+tar                tar.sub     prep.py tar      in:  prep.py, README.md, the CSV, both .h5
+                                                 out: OUT/virgo_glitches.tar
 ```
+
+The logs of every node are in `OUT/logs/` (`part_<k>`, `merge_<average>`, `tar`, `.out`/`.err`), and the HTCondor
+event log of all of them is `OUT/logs/vigilant.log`.
 
 ### 1. Set up (once)
 
@@ -109,7 +113,7 @@ git -C ~/virgo-glitch-classification lfs pull
 cp ~/virgo-glitch-classification/data/csvs/virgo_o3b_no_NOTA_no_rareclasses_no_Whis_from_v4.csv ~/sage/eucaif/vigilant/
 head -3 ~/sage/eucaif/vigilant/virgo_o3b_no_NOTA_no_rareclasses_no_Whis_from_v4.csv   # id,GPStime,... and two glitches
 
-# a Python with h5py and pandas, for prep.py dag/parts and the merge (the jobs use the image instead)
+# a Python with h5py and pandas, for prep.py dag/parts (the jobs use the image instead)
 source /cvmfs/software.igwn.org/conda/etc/profile.d/conda.sh
 conda activate igwn
 
@@ -135,7 +139,7 @@ CSV=/home/melissa.lopez/sage/eucaif/vigilant/virgo_o3b_no_NOTA_no_rareclasses_no
 TEST=/home/melissa.lopez/vigilant_test                            # ~200 MB
 
 head -21 $CSV > $TEST.csv                                         # header + 20 glitches: /home/melissa.lopez/vigilant_test.csv
-python eucaif/vigilant/prep.py dag $TEST.csv $TEST --chunk 10     # 2 jobs, then merge
+python eucaif/vigilant/prep.py dag $TEST.csv $TEST --chunk 10     # 2 parts, 2 merges, 1 tar
 condor_submit_dag $TEST/vigilant.dag
 ```
 
@@ -144,7 +148,9 @@ When the DAG is done (`condor_q` empty):
 ```bash
 tail -3 $TEST/logs/part_0.out        # "time per sample (...): mean X s": X is what step 3 needs
 cat $TEST/logs/part_*.err            # empty, or warnings only
-cat $TEST/logs/merge.out             # "... 20 glitches from 2 parts, 0 skipped", "-> .../virgo_glitches.tar"
+cat $TEST/logs/merge_*.out           # "... 20 glitches from 2 parts, 0 skipped"
+cat $TEST/logs/tar.out               # "-> ./virgo_glitches.tar: ..."
+ls -lh $TEST                         # virgo_glitches_{median,welch}.h5, virgo_glitches.tar
 python -c "import h5py; h = h5py.File('$TEST/virgo_glitches_median.h5'); print(h['whitened'].shape, list(h['metadata']))"
 ```
 
@@ -184,17 +190,19 @@ tail $OUT/logs/part_3.out                       # a part: "100 of 1500 done, X s
 ls $OUT/parts/                                  # the parts sent back so far
 ```
 
-- Logs: `$OUT/logs/part_<k>.{out,err}`, `merge.out`, and the HTCondor event log `vigilant.log`.
-- The merge (the last node) takes a while: ~58 GB read, ~115 GB written. `tail -f $OUT/logs/merge.out`.
+- Logs: `$OUT/logs/{part_<k>,merge_median,merge_welch,tar}.{out,err}` and the HTCondor event log `vigilant.log`.
+- The merge and tar jobs move a lot of data for 12k glitches: each merge gets ~29 GB of parts and returns ~29 GB,
+  the tar gets ~58 GB and returns ~58 GB. They ask for that much sandbox disk (`request_disk`), so they may wait
+  longer for a machine; `condor_q -better-analyze <id>` if they stay idle.
 - Glitches without data are skipped and listed in the files' `skipped_rows` attribute (CSV rows); the part goes on.
 - A job on hold: `condor_q -hold` says why. Out of memory: `condor_qedit <id> RequestMemory=8000`; expired
   token: `htgettoken ...` as in step 1; then `condor_release <id>`.
 
 ### 5. If something fails
 
-Each part is retried twice. If a part still fails, the DAG stops before the merge. Fix the cause, then write the
-DAG again (it leaves out the parts already in `$OUT/parts/`; with all of them there, only the merge is left) and
-submit it:
+Every node is retried twice. If one still fails, the nodes after it don't run. Fix the cause, then write the DAG
+again (it leaves out the parts already in `$OUT/parts/`; with all of them there, only the merges and the tar are
+left) and submit it:
 
 ```bash
 python eucaif/vigilant/prep.py dag $CSV $OUT --chunk 1500         # same --chunk as before!
@@ -229,12 +237,13 @@ The login node may read the frames differently from the execute nodes, so only t
 
 ### 6. The result
 
-When the DAG is done, `$OUT/logs/merge.out` ends with the two files and the tar (if a part is missing, it lists it
-and the merge node fails: see 5). The merge can also be run by hand, e.g. for another tar name:
-`python eucaif/vigilant/prep.py merge $CSV $OUT --chunk 1500 --tar other.tar`.
+When the DAG is done:
 
 - `$OUT/virgo_glitches_median.h5`, `$OUT/virgo_glitches_welch.h5`: ~29 GB each for 12,186 glitches (format above).
+  `merge_<average>.out` gives the number of glitches and of skipped ones.
 - `$OUT/virgo_glitches.tar`: both and this README, ~58 GB (uncompressed: whitened noise does not compress).
-- Disk: the parts, the merged files and the tar take ~58 GB each, ~175 GB at the peak. After checking `merge.out`
-  (all glitches, the expected number skipped), `rm -r $OUT/parts` frees ~58 GB; keep either the tar or the two
-  `.h5` files.
+- Disk in `$OUT`: the parts, the merged files and the tar take ~58 GB each, ~175 GB in all. After checking the
+  merge logs, `rm -r $OUT/parts` frees ~58 GB; keep either the tar or the two `.h5` files.
+
+The steps can also be run by hand, e.g. another tar name: `python eucaif/vigilant/prep.py tar $CSV $OUT --tar
+other.tar` (`merge` likewise, with `--average` for one of the two).

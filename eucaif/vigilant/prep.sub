@@ -1,9 +1,8 @@
-# HTCondor: one part of the Vigilant glitches (prep.py run), a node of OUT/vigilant.dag, in the SAGE container
-# (sage_cpu.def). Don't submit this directly: `prep.py dag` writes the DAG, which sets repo, csv, out, chunk, part,
-# acct (accounting group), commit, image and disk (GB).
+# HTCondor: one part of the glitches (prep.py run), node part<k> of OUT/vigilant.dag, in the SAGE container
+# (sage_cpu.def). Written for the DAG: `prep.py dag` sets repo, csv, out, chunk, part, image, acct (accounting
+# group), commit and disk (GB).
 #
-# The job gets SAGE's sage/ package, prep.py and the CSV in its sandbox, gets h(t) with gwpy's TimeSeries.get
-# (datafind.igwn.org, the job's SciToken) and sends parts/ back to OUT/parts/.
+# in:  SAGE's sage/, prep.py, the CSV                  out: parts/ -> OUT/parts/virgo_glitches_partNNN_{median,welch}.h5
 
 universe              = container
 container_image       = $(image)

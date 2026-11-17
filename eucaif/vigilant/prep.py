@@ -3,17 +3,17 @@ prep.py -- whitened Virgo (V1) strain around the glitches of a CSV, at the nativ
 the median- and with the mean-averaged (Welch) PSD. One HDF5 file per average (README.md has the format).
 
     python eucaif/vigilant/prep.py parts CSV --chunk 1500                        # number of jobs
-    python eucaif/vigilant/prep.py dag   CSV OUT --chunk 1500                    # HTCondor: the jobs, then merge
-    python eucaif/vigilant/prep.py merge CSV OUT --chunk 1500 --tar virgo_glitches.tar   # merge by hand
-    python eucaif/vigilant/prep.py run   CSV OUT --chunk 1500 --part 0           # one part (what a job runs)
+    python eucaif/vigilant/prep.py dag   CSV OUT --chunk 1500                    # HTCondor: everything below
+    python eucaif/vigilant/prep.py run   CSV OUT --chunk 1500 --part 0           # one part
+    python eucaif/vigilant/prep.py merge CSV OUT --chunk 1500 [--average median] # parts -> one file per average
+    python eucaif/vigilant/prep.py tar   CSV OUT [--tar virgo_glitches.tar]      # both files + README.md
 
 run does the rows [part * chunk, (part + 1) * chunk) of the CSV into OUT/parts/ and skips a part whose files are
-already there. merge joins the parts in CSV order into OUT/virgo_glitches_{median,welch}.h5 and, with --tar, puts
-both and README.md in OUT/<tar> (uncompressed: whitened noise does not compress). dag writes OUT/vigilant.dag: one
-container job per part not yet in OUT/parts (prep.sub), which gets its inputs and returns its files by HTCondor file
-transfer, then merge (DAGMan runs it on the submit machine); so after a failure, run dag again and resubmit. Only
-run needs torch, gwpy and SAGE (imported there, with SAGE from the repo or the job's sandbox): parts, dag and merge
-need h5py and pandas.
+already there. merge joins the parts in CSV order into OUT/virgo_glitches_{median,welch}.h5, tar puts both and
+README.md in OUT/<tar> (uncompressed: whitened noise does not compress). dag writes OUT/vigilant.dag with all three
+as container jobs (prep.sub, merge.sub, tar.sub) that get their inputs and return their outputs by HTCondor file
+transfer; after a failure, run dag again (it leaves out the parts already in OUT/parts) and resubmit. Only run needs
+torch, gwpy and SAGE (imported there, with SAGE from the repo or the job's sandbox): the rest needs h5py and pandas.
 """
 import argparse
 import os
@@ -166,15 +166,15 @@ def part_name(part):
     return f"virgo_glitches_part{part:03d}"
 
 
-def merge(out_dir, parts, name="virgo_glitches", tar=None):
-    """Joins OUT/parts/<part_name(p)>_<tag>.h5, p = 0 .. parts - 1, into OUT/<name>_<tag>.h5, in CSV order,
-    copying a glitch at a time; with tar, also writes OUT/<tar> with both files and README.md."""
+def merge(out_dir, parts, name="virgo_glitches", averages=tuple(AVERAGES), parts_dir=None):
+    """Joins <parts_dir>/<part_name(p)>_<tag>.h5, p = 0 .. parts - 1 (parts_dir: OUT/parts by default), into
+    OUT/<name>_<tag>.h5 for each tag in averages, in CSV order, copying a glitch at a time."""
     out_dir = Path(out_dir)
-    src = {tag: [out_dir / "parts" / f"{part_name(p)}_{tag}.h5" for p in range(parts)] for tag in AVERAGES}
+    parts_dir = Path(parts_dir) if parts_dir else out_dir / "parts"
+    src = {tag: [parts_dir / f"{part_name(p)}_{tag}.h5" for p in range(parts)] for tag in averages}
     missing = [str(p) for ps in src.values() for p in ps if not p.exists()]
     if missing:
         raise FileNotFoundError(f"{len(missing)} part files missing, e.g. {missing[0]}: resubmit those parts")
-    finals = []
     for tag, ps in src.items():
         path = out_dir / f"{name}_{tag}.h5"
         tmp = path.with_suffix(".h5.tmp")
@@ -220,21 +220,26 @@ def merge(out_dir, parts, name="virgo_glitches", tar=None):
                          sage_commit=",".join(sorted(commits)))
             out.attrs.update(attrs)
         tmp.rename(path)
-        finals.append(path)
         print(f"{path}: {n} glitches from {parts} parts, {len(attrs['skipped_rows'])} skipped", flush=True)
-    if tar:
-        with tarfile.open(out_dir / tar, "w") as t:
-            for p in finals:
-                t.add(p, arcname=p.name)
-            t.add(HERE / "README.md", arcname="README.md")
-        print(f"-> {out_dir / tar}", flush=True)
 
 
-def write_dag(csv, out_dir, parts, chunk, accounting_group, tar, image, retries=2):
-    """OUT/vigilant.dag: a container job per part not yet in OUT/parts (prep.sub, retried), then a node merge that
-    submits nothing (NOOP) but whose PRE script, OUT/merge.sh, runs prep.py merge on the submit machine with this
-    Python once every part has succeeded (log: OUT/logs/merge.out)."""
-    import shlex
+def make_tar(out_dir, tar, name="virgo_glitches"):
+    """OUT/<tar>: OUT/<name>_<tag>.h5 for every tag and README.md (next to prep.py), uncompressed."""
+    out_dir = Path(out_dir)
+    files = [out_dir / f"{name}_{tag}.h5" for tag in AVERAGES] + [HERE / "README.md"]
+    missing = [str(f) for f in files if not f.exists()]
+    if missing:
+        raise FileNotFoundError(f"missing: {', '.join(missing)}")
+    with tarfile.open(out_dir / tar, "w") as t:
+        for f in files:
+            t.add(f, arcname=f.name)
+    print(f"-> {out_dir / tar}: {', '.join(f.name for f in files)}", flush=True)
+
+
+def write_dag(csv, out_dir, parts, chunk, accounting_group, tar, image, n_rows, retries=2):
+    """OUT/vigilant.dag, every node a container job that gets its inputs and returns its outputs by file transfer:
+    part<k> (prep.sub) for each part not yet in OUT/parts, then merge_<tag> (merge.sub) for each average, then tar
+    (tar.sub)."""
     out_dir = Path(out_dir).resolve()
     csv = Path(csv).resolve()
     for d in ("logs", "parts"):
@@ -242,39 +247,41 @@ def write_dag(csv, out_dir, parts, chunk, accounting_group, tar, image, retries=
     done = [k for k in range(parts)
             if all((out_dir / "parts" / f"{part_name(k)}_{tag}.h5").exists() for tag in AVERAGES)]
     todo = [k for k in range(parts) if k not in done]
-    disk_gb = int(np.ceil(chunk * 2 * 2.4e-3)) + 2                # a part's two files, ~2.4 MB per glitch each
-    common = (f'repo="{ROOT}" csv="{csv}" out="{out_dir}" chunk="{chunk}" '
+    gb = 2.4e-3                                                   # GB per glitch and file (32 s at 16 kHz + PSD)
+    disk = lambda n_files_per_glitch: int(np.ceil(n_files_per_glitch * n_rows * gb)) + 2
+    common = (f'repo="{ROOT}" csv="{csv}" out="{out_dir}" chunk="{chunk}" image="{image}" '
               f'acct="{accounting_group}" commit="{sage_commit()}"')
     lines = []
     for k in todo:
         lines += [f"JOB part{k} {HERE / 'prep.sub'}",
-                  f'VARS part{k} {common} part="{k}" image="{image}" disk="{disk_gb}"', f"RETRY part{k} {retries}"]
-
-    merge_cmd = [sys.executable, str(HERE / "prep.py"), "merge", str(csv), str(out_dir), "--chunk", str(chunk),
-                 "--tar", tar]
-    merge_sh = out_dir / "merge.sh"
-    merge_sh.write_text("#!/bin/sh\n# run by DAGMan (SCRIPT PRE of the merge node) once all parts are done\n"
-                        f"export OMP_NUM_THREADS=1\nexec {shlex.join(merge_cmd)} > {out_dir / 'logs' / 'merge.out'} 2>&1\n")
-    merge_sh.chmod(0o755)
-    lines += [f"JOB merge {HERE / 'prep.sub'} NOOP", f"SCRIPT PRE merge {merge_sh}"]
+                  f'VARS part{k} {common} part="{k}" disk="{int(np.ceil(chunk * 2 * gb)) + 2}"',
+                  f"RETRY part{k} {retries}"]
+    for tag in AVERAGES:
+        inputs = ", ".join(str(out_dir / "parts" / f"{part_name(k)}_{tag}.h5") for k in range(parts))
+        lines += [f"JOB merge_{tag} {HERE / 'merge.sub'}",
+                  f'VARS merge_{tag} {common} average="{tag}" parts_files="{inputs}" disk="{disk(2)}"',
+                  f"RETRY merge_{tag} {retries}"]
+    lines += [f"JOB tar {HERE / 'tar.sub'}", f'VARS tar {common} tar="{tar}" disk="{disk(4)}"',
+              f"RETRY tar {retries}"]
     if todo:
-        lines += ["PARENT " + " ".join(f"part{k}" for k in todo) + " CHILD merge"]
-
+        lines += ["PARENT " + " ".join(f"part{k}" for k in todo) + " CHILD " + " ".join(f"merge_{t}" for t in AVERAGES)]
+    lines += ["PARENT " + " ".join(f"merge_{t}" for t in AVERAGES) + " CHILD tar"]
     path = out_dir / "vigilant.dag"
     path.write_text("\n".join(lines) + "\n")
-    print(f"-> {path}: {len(todo)} of {parts} parts of {chunk} glitches to do ({len(done)} done), then merge "
-          f"(log {out_dir / 'logs' / 'merge.out'})\n   condor_submit_dag {path}")
+    print(f"-> {path}: {len(todo)} of {parts} parts of {chunk} glitches to do ({len(done)} done), "
+          f"then merge_{{{','.join(AVERAGES)}}}, then tar\n   condor_submit_dag {path}")
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("command", choices=["parts", "run", "merge", "dag"])
+    p.add_argument("command", choices=["parts", "run", "merge", "tar", "dag"])
     p.add_argument("csv", help="glitch list with a GPStime column; all its columns are kept as metadata")
     p.add_argument("out", nargs="?", help="output directory (run, merge)")
     p.add_argument("--chunk", type=int, default=1500, help="glitches per job")
     p.add_argument("--part", type=int, default=0, help="which part to do (run): rows part * chunk ...")
-    p.add_argument("--tar", help="merge: also write this tar of the merged files and README.md, in OUT "
-                                 "(dag: default virgo_glitches.tar)")
+    p.add_argument("--tar", default="virgo_glitches.tar", help="tar, dag: name of the tar in OUT (default: %(default)s)")
+    p.add_argument("--average", choices=list(AVERAGES), help="merge: only this average (default: all)")
+    p.add_argument("--parts-dir", help="merge: where the part files are (default: OUT/parts)")
     p.add_argument("--accounting-group", default="ligo.dev.o4.detchar.glitch_classification.lib",
                    help="dag: HTCondor accounting_group (default: %(default)s)")
     p.add_argument("--image", default=DEFAULT_IMAGE,
@@ -290,8 +297,7 @@ def main(argv=None):
     if args.out is None:
         p.error(f"{args.command} needs OUT")
     if args.command == "dag":
-        write_dag(args.csv, args.out, parts, args.chunk, args.accounting_group, args.tar or "virgo_glitches.tar",
-                  args.image)
+        write_dag(args.csv, args.out, parts, args.chunk, args.accounting_group, args.tar, args.image, len(df))
         return
     if args.command == "run":
         if not 0 <= args.part < parts:
@@ -303,8 +309,10 @@ def main(argv=None):
         lo = args.part * args.chunk
         print(f"part {args.part}/{parts}: rows {lo} .. {min(lo + args.chunk, len(df)) - 1}", flush=True)
         save_glitches(df.iloc[lo:lo + args.chunk], Path(args.out) / "parts", name=name)
+    elif args.command == "merge":
+        merge(args.out, parts, averages=[args.average] if args.average else list(AVERAGES), parts_dir=args.parts_dir)
     else:
-        merge(args.out, parts, tar=args.tar)
+        make_tar(args.out, args.tar)
 
 
 if __name__ == "__main__":
