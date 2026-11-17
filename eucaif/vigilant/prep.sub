@@ -20,9 +20,8 @@ initialdir              = $(out)
 
 use_oauth_services          = scitokens
 scitokens_oauth_permissions = read:/virgo gwdatafind.read
-# h(t): gwpy's TimeSeries.get asks GWDATAFIND_SERVER for the files and reads them; the token lets it query
-# datafind and read the IGWN private data (OSDF, mounted in CVMFS on nodes that have it)
-requirements       = (Arch == "X86_64") && (HAS_CVMFS_IGWN_PRIVATE_DATA =?= True)
+# h(t): gwpy's TimeSeries.get asks GWDATAFIND_SERVER for the files and reads them, with the job's token
+requirements       = (Arch == "X86_64")
 
 output         = $(out)/logs/part_$(part).out
 error          = $(out)/logs/part_$(part).err
