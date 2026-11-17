@@ -2,8 +2,8 @@
 # (sage_cpu.def). Don't submit this directly: `prep.py dag` writes the DAG, which sets repo, csv, out, chunk, part,
 # acct (accounting group), commit, image and disk (GB).
 #
-# The job gets SAGE's sage/ package, prep.py and the CSV in its sandbox, reads h(t) from CVMFS (datafind.igwn.org,
-# with the job's SciToken) and sends parts/ back to OUT/parts/.
+# The job gets SAGE's sage/ package, prep.py and the CSV in its sandbox, gets h(t) with gwpy's TimeSeries.get
+# (datafind.igwn.org, the job's SciToken) and sends parts/ back to OUT/parts/.
 
 universe              = container
 container_image       = $(image)
@@ -20,8 +20,8 @@ initialdir              = $(out)
 
 use_oauth_services          = scitokens
 scitokens_oauth_permissions = read:/virgo gwdatafind.read
-# h(t): datafind.igwn.org gives /cvmfs/virgo.storage.igwn.org paths (IGWN private data in CVMFS, from OSDF),
-# read with the job's token; any node with that CVMFS will do
+# h(t): gwpy's TimeSeries.get asks GWDATAFIND_SERVER for the files and reads them; the token lets it query
+# datafind and read the IGWN private data (OSDF, mounted in CVMFS on nodes that have it)
 requirements       = (Arch == "X86_64") && (HAS_CVMFS_IGWN_PRIVATE_DATA =?= True)
 
 output         = $(out)/logs/part_$(part).out

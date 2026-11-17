@@ -13,8 +13,8 @@ transfer_input_files  = $ENV(HOME)/sage/sage, $ENV(HOME)/sage/eucaif/vigilant/pr
 
 use_oauth_services          = scitokens
 scitokens_oauth_permissions = read:/virgo gwdatafind.read
-# h(t): datafind.igwn.org gives /cvmfs/virgo.storage.igwn.org paths (IGWN private data in CVMFS, from OSDF),
-# read with the job's token; any node with that CVMFS will do
+# h(t): gwpy's TimeSeries.get asks GWDATAFIND_SERVER for the files and reads them; the token lets it query
+# datafind and read the IGWN private data (OSDF, mounted in CVMFS on nodes that have it)
 requirements       = (Arch == "X86_64") && (HAS_CVMFS_IGWN_PRIVATE_DATA =?= True)
 
 request_cpus   = 1

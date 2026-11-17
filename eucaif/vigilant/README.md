@@ -76,8 +76,8 @@ Given the same data, steps 2 and 3 match gwpy to ~1e-11.
 ## HTCondor
 
 The jobs run in a container (`universe = container`, as in the anomalydetection CIT pipeline), on any IGWN node
-with the private data in CVMFS: h(t) comes from OSDF through `/cvmfs/virgo.storage.igwn.org` (gwpy finds the files
-with `datafind.igwn.org` and the job's SciToken, `read:/virgo gwdatafind.read`). They see nothing of your home directory: HTCondor transfers SAGE's `sage/`, `prep.py` and the CSV into
+with the IGWN private data (OSDF, in CVMFS): gwpy's `TimeSeries.get` finds h(t) with `GWDATAFIND_SERVER=datafind.igwn.org`
+and reads it with the job's SciToken (`read:/virgo gwdatafind.read`). They see nothing of your home directory: HTCondor transfers SAGE's `sage/`, `prep.py` and the CSV into
 each job's sandbox, and transfers the job's two files back. The image (`sage_cpu.def`: Python 3.11, CPU torch,
 gwpy 4, h5py, a frame reader) holds no SAGE, so code changes need no rebuild. The old `anomaly` image is Python 3.9,
 which SAGE does not run on.
@@ -157,7 +157,8 @@ python -c "from gwdatafind import find_urls; print(find_urls('V', 'HoftOnline', 
 ls /cvmfs/virgo.storage.igwn.org/ | head        # empty or an error: no token or no CVMFS on that node
 ```
 
-The URLs should be `file:///cvmfs/virgo.storage.igwn.org/...` (or plain `/cvmfs/...` paths).
+`find_urls` is what `TimeSeries.get` asks; it should give files the job can open (expected under
+`/cvmfs/virgo.storage.igwn.org/`).
 
 ### 3. Run all glitches
 
