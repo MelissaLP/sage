@@ -1,0 +1,35 @@
+# HTCondor: a job that only sleeps, with the same image, files and token as a prep.sub job, to get a shell in it
+# with condor_ssh_to_job and run or debug prep.py by hand (README.md, "Run prep.py by hand"):
+#
+#   condor_submit eucaif/vigilant/debug.sub csv=/home/melissa.lopez/vigilant_test.csv
+#   condor_ssh_to_job <job id>                                     # once it runs: a shell in the sandbox
+#   python prep.py run vigilant_test.csv . --chunk 10 --part 0
+#   condor_rm <job id>                                             # when done (else it ends after 2 h)
+
+universe              = container
+container_image       = osdf:///igwn/cit/staging/melissa.lopez/sage_cpu.sif
+executable            = /bin/sleep
+transfer_executable   = False
+arguments             = 7200                    # seconds the shell stays available
+environment           = "OMP_NUM_THREADS=1 GWDATAFIND_SERVER=datafind.igwn.org"
+
+should_transfer_files   = YES
+when_to_transfer_output = ON_EXIT
+transfer_input_files    = $ENV(HOME)/sage/sage, $ENV(HOME)/sage/eucaif/vigilant/prep.py, $(csv)
+transfer_output_files   = ""
+
+use_oauth_services          = scitokens
+scitokens_oauth_permissions = read:/virgo gwdatafind.read
+# h(t): gwpy's TimeSeries.get asks GWDATAFIND_SERVER for the files and reads them; the token lets it query
+# datafind and read the IGWN private data (OSDF, mounted in CVMFS on nodes that have it)
+requirements       = (Arch == "X86_64") && (HAS_CVMFS_IGWN_PRIVATE_DATA =?= True)
+
+output         = $ENV(HOME)/vigilant_debug.out
+error          = $ENV(HOME)/vigilant_debug.err
+log            = $ENV(HOME)/vigilant_debug.log
+request_cpus   = 1
+request_memory = 4 GB
+request_disk   = 5 GB
+accounting_group      = ligo.dev.o4.detchar.glitch_classification.lib
+accounting_group_user = $ENV(USER)
+queue

@@ -150,7 +150,7 @@ python -c "import h5py; h = h5py.File('$TEST/virgo_glitches_median.h5'); print(h
 
 `(20, 524288)` and the CSV's columns (`GPStime`, `label`, `split`, ...) mean it works. If the parts fail reading
 the data (`RuntimeError`/`FileNotFoundError` from `TimeSeries.get` in `part_*.out`, every glitch "skipped"), the
-job cannot reach h(t): stop there and check it in an interactive job ("Run prep.py by hand"):
+job cannot reach h(t): stop there and check it in a debug job ("Run prep.py by hand"):
 
 ```bash
 python -c "from gwdatafind import find_urls; print(find_urls('V', 'HoftOnline', 1264551656, 1264551720))"
@@ -207,13 +207,16 @@ Keep the same `--chunk`: the parts are numbered by it. To start over, delete `$O
 
 To test or debug a part without the DAG. `prep.py` finds SAGE by itself (next to it in a job, the repo otherwise).
 
-On an execute node, exactly as a job (same image, files and token), in an interactive shell:
+On an execute node, exactly as a job (same image, files and token): submit a job that only sleeps, and log into it
+(`condor_submit -i` is not allowed in the pool):
 
 ```bash
-condor_submit -i eucaif/vigilant/interactive.sub csv=$TEST.csv
-# inside, in the sandbox (sage/, prep.py and the CSV are there):
+condor_submit eucaif/vigilant/debug.sub csv=$TEST.csv            # prints the job id, e.g. 1234567
+condor_q 1234567                                                   # wait until it runs (R)
+condor_ssh_to_job 1234567                                          # a shell in the sandbox: sage/, prep.py, the CSV
 python prep.py run vigilant_test.csv . --chunk 10 --part 0        # -> ./parts/virgo_glitches_part000_{median,welch}.h5
 exit
+condor_rm 1234567                                                  # else it ends by itself after 2 h (arguments in debug.sub)
 ```
 
 Results stay in the sandbox and are deleted with it. On the login node, in the image (your home is visible there):
