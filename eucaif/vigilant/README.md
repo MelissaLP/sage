@@ -1,6 +1,7 @@
 # Vigilant: whitened Virgo glitches
 
-Whitened Virgo (V1) strain around the O3b glitches of `O3b_vigilant_train_set.csv`, made by `prep.py`
+Whitened Virgo (V1) strain around the O3b glitches of a glitch CSV, e.g. virgo-glitch-classification's
+`data/csvs/virgo_o3b_no_NOTA_no_rareclasses_no_Whis_from_v4.csv` (Git LFS: `git lfs pull` first), made by `prep.py`
 (`save_glitches`; on HTCondor, see below; `virgo_data_prep.ipynb` does a few glitches interactively).
 
 ## Data format
@@ -16,8 +17,7 @@ Two HDF5 files with the same glitches and layout, differing only in the PSD aver
 | `frequencies` | (32769,) float64 | frequencies of the PSD bins (Hz, 0.25 Hz apart) |
 | `metadata/row` | (n,) int64 | row of the CSV |
 | `metadata/GPStime` | (n,) float64 | glitch GPS time in s, rounded to 1 ms (the time the window is centred on) |
-| `metadata/snr`, `metadata/confidence` | (n,) | from the CSV |
-| `metadata/label`, `metadata/new_label` | (n,) string | from the CSV |
+| `metadata/<column>` | (n,) | every other column of the CSV (`label`, `snr`, `confidence`, ...; text as strings) |
 
 File attributes: `sample_rate`, `keep` (32 s), `total` (64 s), `highpass`, `fduration`, `gps_decimals`,
 `channel`, `frametype`, `psd_average` (`median` or `mean`), `skipped_rows` (CSV rows without data), `whitening`,
@@ -92,7 +92,8 @@ pelican object put sage_cpu.sif osdf:///igwn/cit/staging/$USER/sage_cpu.sif
 Then, from the SAGE repo root, in a shell with h5py and pandas (e.g. `conda activate igwn`; the merge runs there):
 
 ```bash
-CSV=eucaif/vigilant/O3b_vigilant_train_set.csv; OUT=/path/on/shared/disk/vigilant
+CSV=/path/to/virgo-glitch-classification/data/csvs/virgo_o3b_no_NOTA_no_rareclasses_no_Whis_from_v4.csv
+OUT=/path/on/shared/disk/vigilant
 PYTHONPATH=. python -m eucaif.vigilant.prep dag $CSV $OUT --chunk 1500   # --image osdf:///.../sage_cpu.sif if not melissa.lopez's
 condor_submit_dag $OUT/vigilant.dag
 ```

@@ -29,7 +29,6 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent                                      # the SAGE repo (in a job's sandbox: not a repo)
 CHANNEL, FRAMETYPE = "V1:Hrec_hoft_16384Hz", "HoftOnline"
 AVERAGES = {"median": "median", "welch": "mean"}   # file tag -> TorchWelch avg_method (gwpy's method="median" / "welch")
-COLUMNS = ["GPStime", "snr", "confidence", "label", "new_label"]   # CSV columns kept as metadata
 DEFAULT_IMAGE = "osdf:///igwn/cit/staging/melissa.lopez/sage_cpu.sif"   # sage_cpu.def, uploaded as in README.md
 
 
@@ -116,14 +115,17 @@ def save_glitches(df, out_dir, n=None, total=64, keep=32, highpass=10, name="vir
             h = files[tag]
             g = h.create_group("metadata")
             g["row"] = np.asarray(rows, dtype=np.int64)         # row of the CSV
-            for col in COLUMNS:
+            for col in meta.columns:                            # every CSV column but pandas' saved index
+                if str(col).startswith("Unnamed:"):
+                    continue
                 v = meta[col].to_numpy()
                 if col == 'GPStime':
                     v = np.round(v.astype(np.float64), 3)       # stored to 1 ms, as used for the centring
+                name = str(col).replace("/", "_")
                 if v.dtype == object:
-                    g.create_dataset(col, data=v.astype(str).tolist(), dtype=h5py.string_dtype())
+                    g.create_dataset(name, data=v.astype(str).tolist(), dtype=h5py.string_dtype())
                 else:
-                    g[col] = v
+                    g[name] = v
             h.attrs.update(keep=keep, total=total, highpass=highpass, fduration=2.0, gps_decimals=3,
                            channel=CHANNEL, frametype=FRAMETYPE, psd_average=avg,
                            skipped_rows=np.asarray(skipped, dtype=np.int64),
@@ -251,7 +253,7 @@ def write_dag(csv, out_dir, parts, chunk, accounting_group, tar, image, retries=
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("command", choices=["parts", "run", "merge", "dag"])
-    p.add_argument("csv", help="glitch list, with the columns " + ", ".join(COLUMNS))
+    p.add_argument("csv", help="glitch list with a GPStime column; all its columns are kept as metadata")
     p.add_argument("out", nargs="?", help="output directory (run, merge)")
     p.add_argument("--chunk", type=int, default=1500, help="glitches per job")
     p.add_argument("--part", type=int, default=0, help="which part to do (run): rows part * chunk ...")
@@ -263,6 +265,8 @@ def main(argv=None):
                    help="dag: the container image of the jobs, built from sage_cpu.def (default: %(default)s)")
     args = p.parse_args(argv)
     df = pd.read_csv(args.csv)
+    if "GPStime" not in df.columns:
+        p.error(f"{args.csv} has no GPStime column (a Git LFS pointer not pulled?): {list(df.columns)[:5]}")
     parts = n_parts(len(df), args.chunk)
     if args.command == "parts":
         print(parts)
