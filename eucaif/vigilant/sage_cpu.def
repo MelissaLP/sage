@@ -18,6 +18,8 @@ From: condaforge/miniforge3:24.11.3-0
 %environment
     export PATH=/opt/conda/envs/sage/bin:$PATH
     export LC_ALL=C
+    # matplotlib (imported by gwpy) and fontconfig want a writable cache; $HOME is read-only in the container
+    export MPLCONFIGDIR=${TMPDIR:-/tmp}/matplotlib XDG_CACHE_HOME=${TMPDIR:-/tmp}/cache MPLBACKEND=Agg
 
 %test
     /opt/conda/envs/sage/bin/python -c "import torch, numpy, gwpy, h5py, pandas, framel; x = torch.from_numpy(numpy.random.default_rng(0).standard_normal(4096)); print('ok', torch.__version__, numpy.__version__, gwpy.__version__, float(torch.fft.rfft(x).abs().median()))"
