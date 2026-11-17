@@ -75,35 +75,122 @@ Given the same data, steps 2 and 3 match gwpy to ~1e-11.
 
 ## HTCondor
 
-The jobs run in a container (`universe = container`, as the anomalydetection CIT pipeline), at CIT where the frames
-are. The image (`sage_cpu.def`: Python 3.11, CPU torch, gwpy, h5py, a frame reader) holds no SAGE: each job gets
-SAGE's `sage/`, `prep.py` and the CSV in its sandbox, so code changes need no rebuild. The old `anomaly` image is
+The jobs run in a container (`universe = container`, as in the anomalydetection CIT pipeline), at CIT where the
+frames are. The image (`sage_cpu.def`: Python 3.11, CPU torch, gwpy 4, h5py, a frame reader) holds no SAGE: each job
+gets SAGE's `sage/`, `prep.py` and the CSV in its sandbox, so code changes need no rebuild. The old `anomaly` image is
 Python 3.9, which SAGE does not run on.
 
-Once, build the image and put it on OSDF (on a CIT login node, with a token as in anomalydetection's
-`running_on_condor.md`):
+How it runs:
 
-```bash
-apptainer build sage_cpu.sif eucaif/vigilant/sage_cpu.def
-htgettoken -v -a vault.ligo.org -i igwn --scopes "read:/staging write:/staging"
-pelican object put sage_cpu.sif osdf:///igwn/cit/staging/$USER/sage_cpu.sif
+```
+CSV ── prep.py dag ──> OUT/vigilant.dag
+                          │
+       one container job per --chunk glitches (prep.sub, at CIT, retried twice)
+                          │  each sends back OUT/parts/virgo_glitches_partNNN_{median,welch}.h5
+                          │
+       merge (merge.sub, on the submit machine, after all parts)
+                          │
+OUT/virgo_glitches_median.h5, OUT/virgo_glitches_welch.h5, OUT/virgo_glitches.tar (both + this README)
 ```
 
-Then, from the SAGE repo root, in a shell with h5py and pandas (e.g. `conda activate igwn`; the merge runs there):
+### 1. Set up (once)
+
+On a CIT login node (e.g. `ldas-osg`):
 
 ```bash
-CSV=/path/to/virgo-glitch-classification/data/csvs/virgo_o3b_no_NOTA_no_rareclasses_no_Whis_from_v4.csv
-OUT=/path/on/shared/disk/vigilant
-PYTHONPATH=. python -m eucaif.vigilant.prep dag $CSV $OUT --chunk 1500   # --image osdf:///.../sage_cpu.sif if not melissa.lopez's
+# SAGE on the eucaif branch, and the glitch list (the CSVs are in Git LFS: without the pull they are 3-line pointers)
+git -C ~/sage checkout eucaif && git -C ~/sage pull
+git -C ~/virgo-glitch-classification lfs pull
+
+# a Python with h5py and pandas for prep.py dag/parts and the merge (the jobs inherit nothing from it)
+source /cvmfs/software.igwn.org/conda/etc/profile.d/conda.sh
+conda activate igwn
+
+# the image: build it and put it on OSDF (~1 GB). Rebuild only if sage_cpu.def changes
+cd ~/sage
+apptainer build sage_cpu.sif eucaif/vigilant/sage_cpu.def      # ends with "ok 2.10.0 ..." from its %test
+htgettoken -v -a vault.ligo.org -i igwn --scopes "read:/staging write:/staging"
+pelican object put sage_cpu.sif osdf:///igwn/cit/staging/melissa.lopez/sage_cpu.sif
+pelican object ls osdf:///igwn/cit/staging/melissa.lopez/      # check it is there
+```
+
+`osdf:///igwn/cit/staging/melissa.lopez/sage_cpu.sif` is the default image; someone else passes theirs with
+`--image`.
+
+### 2. Test with 20 glitches
+
+Every command from the SAGE repo root, in the shell of step 1:
+
+```bash
+cd ~/sage
+CSV=~/virgo-glitch-classification/data/csvs/virgo_o3b_no_NOTA_no_rareclasses_no_Whis_from_v4.csv
+TEST=/path/on/shared/disk/vigilant_test
+
+head -21 $CSV > $TEST.csv                                         # header + 20 glitches
+PYTHONPATH=. python -m eucaif.vigilant.prep dag $TEST.csv $TEST --chunk 10   # 2 jobs, then merge
+condor_submit_dag $TEST/vigilant.dag
+```
+
+When it is done (`condor_q` empty):
+
+```bash
+tail -3 $TEST/logs/part_0.out        # "time per sample (...): mean X s": X is what step 3 needs
+cat $TEST/logs/part_*.err            # empty, or warnings only
+cat $TEST/logs/merge.out             # "... 20 glitches from 2 parts, 0 skipped", "-> .../virgo_glitches.tar"
+python -c "import h5py; h = h5py.File('$TEST/virgo_glitches_median.h5'); print(h['whitened'].shape, list(h['metadata']))"
+```
+
+`(20, 524288)` and the CSV's columns (`GPStime`, `label`, `split`, ...) mean it works. If the parts fail reading
+the data (`RuntimeError`/`FileNotFoundError` from `TimeSeries.get` in `part_*.out`, every glitch "skipped"), the
+container cannot see the frames: stop there.
+
+### 3. Run all glitches
+
+Pick `--chunk` for ~0.5 h per job: 1800 / X, with X the seconds per sample of step 2 (1500 if X is ~1.2 s).
+
+```bash
+OUT=/path/on/shared/disk/vigilant                                 # ~175 GB free for 12k glitches, see below
+PYTHONPATH=. python -m eucaif.vigilant.prep parts $CSV --chunk 1500          # number of jobs: 9 for 12,186 glitches
+PYTHONPATH=. python -m eucaif.vigilant.prep dag $CSV $OUT --chunk 1500
 condor_submit_dag $OUT/vigilant.dag
 ```
 
-- One container job per `--chunk` glitches (`prep.sub`) sends its two files back to `OUT/parts/`. When all are
-  done, `merge.sub` (on the submit machine) joins them, in CSV order, into `OUT/virgo_glitches_{median,welch}.h5`
-  and writes `OUT/virgo_glitches.tar` (both files and this README, uncompressed: whitened noise does not compress).
-- Accounting group: `ligo.dev.o4.detchar.glitch_classification.lib` (`--accounting-group` to change it).
-- Pick `--chunk` for ~0.5 h per job: 1800 s / (seconds per sample), printed at the end of each part's log
-  (`OUT/logs/part_*.out`). Try a small CSV first (e.g. `head -21 $CSV > test.csv`, `--chunk 10`: 2 jobs).
-- Each part is retried twice. After a failure, run `prep.py dag` again: it leaves out the parts already in
-  `OUT/parts/`; then `condor_submit_dag -force $OUT/vigilant.dag`.
-- Disk: parts, merged files and tar each take ~57 GB for 12k glitches; the parts can be deleted after the merge.
+Options of `prep.py dag`: `--chunk` (glitches per job), `--image` (container), `--accounting-group` (default
+`ligo.dev.o4.detchar.glitch_classification.lib`), `--tar` (default `virgo_glitches.tar`).
+
+### 4. Follow it
+
+```bash
+condor_q -dag -nobatch                          # the jobs of the DAG
+tail -f $OUT/vigilant.dag.dagman.out            # DAG progress
+tail $OUT/logs/part_3.out                       # a part: "100 of 1500 done, X s per sample", every 100 glitches
+ls $OUT/parts/                                  # the finished parts
+```
+
+- Logs: `$OUT/logs/part_<k>.{out,err}`, `merge.{out,err}`, and the HTCondor event log `vigilant.log`.
+- Glitches without data are skipped and listed in the files' `skipped_rows` attribute (CSV rows); the part goes on.
+- A job on hold: `condor_q -hold` says why. Out of memory: `condor_qedit <id> RequestMemory=8000`; expired
+  token: `htgettoken ...` as in step 1; then `condor_release <id>`.
+
+### 5. If something fails
+
+Each part is retried twice. If a part still fails, the DAG stops before the merge. Fix the cause, then write the DAG
+again (it leaves out the parts already in `$OUT/parts/`) and submit it:
+
+```bash
+PYTHONPATH=. python -m eucaif.vigilant.prep dag $CSV $OUT --chunk 1500      # same --chunk as before!
+condor_submit_dag -force $OUT/vigilant.dag
+```
+
+Keep the same `--chunk`: the parts are numbered by it. To start over, delete `$OUT`.
+
+### 6. The result
+
+- `$OUT/virgo_glitches_median.h5`, `$OUT/virgo_glitches_welch.h5`: ~29 GB each for 12,186 glitches (format above).
+- `$OUT/virgo_glitches.tar`: both and this README, ~58 GB (uncompressed: whitened noise does not compress).
+- Disk: the parts, the merged files and the tar take ~58 GB each, ~175 GB at the peak. After checking the merged
+  files (`merge.out`: all glitches, the expected number skipped), `rm -r $OUT/parts` frees ~58 GB; keep either the
+  tar or the two `.h5` files.
+
+`merge` can also be run by hand, e.g. for another tar name: `python eucaif/vigilant/prep.py merge $CSV $OUT --chunk
+1500 --tar other.tar`.
