@@ -1,7 +1,7 @@
 # Vigilant: whitened Virgo glitches
 
-Whitened Virgo (V1) strain around the O3b glitches of a glitch CSV, e.g. virgo-glitch-classification's
-`data/csvs/virgo_o3b_no_NOTA_no_rareclasses_no_Whis_from_v4.csv` (Git LFS: `git lfs pull` first), made by `prep.py`
+Whitened Virgo (V1) strain around the O3b glitches of a glitch CSV: `virgo_o3b_no_NOTA_no_rareclasses_no_Whis_from_v4.csv`
+(12,186 glitches, from virgo-glitch-classification's `data/csvs/`, copied next to this README; not committed), made by `prep.py`
 (`save_glitches`; on HTCondor, see below; `virgo_data_prep.ipynb` does a few glitches interactively).
 
 ## Data format
@@ -98,9 +98,14 @@ OUT/virgo_glitches_median.h5, OUT/virgo_glitches_welch.h5, OUT/virgo_glitches.ta
 On a CIT login node (e.g. `ldas-osg`):
 
 ```bash
-# SAGE on the eucaif branch, and the glitch list (the CSVs are in Git LFS: without the pull they are 3-line pointers)
+# SAGE on the eucaif branch
 git -C ~/sage checkout eucaif && git -C ~/sage pull
+
+# the glitch list, next to this README. In virgo-glitch-classification the CSVs are in Git LFS: pull them first,
+# or the copy is a 3-line pointer ("version https://git-lfs...") instead of the glitches
 git -C ~/virgo-glitch-classification lfs pull
+cp ~/virgo-glitch-classification/data/csvs/virgo_o3b_no_NOTA_no_rareclasses_no_Whis_from_v4.csv ~/sage/eucaif/vigilant/
+head -3 ~/sage/eucaif/vigilant/virgo_o3b_no_NOTA_no_rareclasses_no_Whis_from_v4.csv   # id,GPStime,... and two glitches
 
 # a Python with h5py and pandas for prep.py dag/parts and the merge (the jobs inherit nothing from it)
 source /cvmfs/software.igwn.org/conda/etc/profile.d/conda.sh
@@ -119,14 +124,15 @@ pelican object ls osdf:///igwn/cit/staging/melissa.lopez/      # check it is the
 
 ### 2. Test with 20 glitches
 
-Every command from the SAGE repo root, in the shell of step 1:
+Every command from the SAGE repo root, in the shell of step 1. `CSV` is the glitch list; `TEST` (and `OUT` in
+step 3) are output folders, outside the repo so `git status` stays clean:
 
 ```bash
 cd ~/sage
-CSV=~/virgo-glitch-classification/data/csvs/virgo_o3b_no_NOTA_no_rareclasses_no_Whis_from_v4.csv
-TEST=/path/on/shared/disk/vigilant_test
+CSV=/home/melissa.lopez/sage/eucaif/vigilant/virgo_o3b_no_NOTA_no_rareclasses_no_Whis_from_v4.csv
+TEST=/home/melissa.lopez/vigilant_test                            # ~200 MB
 
-head -21 $CSV > $TEST.csv                                         # header + 20 glitches
+head -21 $CSV > $TEST.csv                                         # header + 20 glitches: /home/melissa.lopez/vigilant_test.csv
 PYTHONPATH=. python -m eucaif.vigilant.prep dag $TEST.csv $TEST --chunk 10   # 2 jobs, then merge
 condor_submit_dag $TEST/vigilant.dag
 ```
@@ -149,7 +155,8 @@ container cannot see the frames: stop there.
 Pick `--chunk` for ~0.5 h per job: 1800 / X, with X the seconds per sample of step 2 (1500 if X is ~1.2 s).
 
 ```bash
-OUT=/path/on/shared/disk/vigilant                                 # ~175 GB free for 12k glitches, see below
+OUT=/home/melissa.lopez/vigilant                                 # needs ~175 GB at the peak, see 6: check the quota
+quota -s; df -h $(dirname $OUT)                                   # if /home is too small, use e.g. /scratch
 PYTHONPATH=. python -m eucaif.vigilant.prep parts $CSV --chunk 1500          # number of jobs: 9 for 12,186 glitches
 PYTHONPATH=. python -m eucaif.vigilant.prep dag $CSV $OUT --chunk 1500
 condor_submit_dag $OUT/vigilant.dag
