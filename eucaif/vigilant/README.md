@@ -75,8 +75,9 @@ Given the same data, steps 2 and 3 match gwpy to ~1e-11.
 
 ## HTCondor
 
-The jobs run in a container (`universe = container`, as in the anomalydetection CIT pipeline), at CIT where the
-frames are. They see nothing of your home directory: HTCondor transfers SAGE's `sage/`, `prep.py` and the CSV into
+The jobs run in a container (`universe = container`, as in the anomalydetection CIT pipeline), on any IGWN node
+with the private data in CVMFS: h(t) comes from OSDF through `/cvmfs/virgo.storage.igwn.org` (gwpy finds the files
+with `datafind.igwn.org` and the job's SciToken, `read:/virgo gwdatafind.read`). They see nothing of your home directory: HTCondor transfers SAGE's `sage/`, `prep.py` and the CSV into
 each job's sandbox, and transfers the job's two files back. The image (`sage_cpu.def`: Python 3.11, CPU torch,
 gwpy 4, h5py, a frame reader) holds no SAGE, so code changes need no rebuild. The old `anomaly` image is Python 3.9,
 which SAGE does not run on.
@@ -84,7 +85,7 @@ which SAGE does not run on.
 ```
 CSV ── prep.py dag ──> OUT/vigilant.dag
                           │
-       one container job per --chunk glitches (prep.sub, at CIT, retried twice)
+       one container job per --chunk glitches (prep.sub, h(t) from CVMFS, retried twice)
          in:  sage/, prep.py, the CSV (transfer_input_files)
          out: OUT/parts/virgo_glitches_partNNN_{median,welch}.h5 (transfer_output_files)
                           │
@@ -149,7 +150,14 @@ python -c "import h5py; h = h5py.File('$TEST/virgo_glitches_median.h5'); print(h
 
 `(20, 524288)` and the CSV's columns (`GPStime`, `label`, `split`, ...) mean it works. If the parts fail reading
 the data (`RuntimeError`/`FileNotFoundError` from `TimeSeries.get` in `part_*.out`, every glitch "skipped"), the
-container cannot see the frames: stop there.
+job cannot reach h(t): stop there and check it in an interactive job ("Run prep.py by hand"):
+
+```bash
+python -c "from gwdatafind import find_urls; print(find_urls('V', 'HoftOnline', 1264551656, 1264551720))"
+ls /cvmfs/virgo.storage.igwn.org/ | head        # empty or an error: no token or no CVMFS on that node
+```
+
+The URLs should be `file:///cvmfs/virgo.storage.igwn.org/...` (or plain `/cvmfs/...` paths).
 
 ### 3. Run all glitches
 

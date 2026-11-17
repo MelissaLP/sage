@@ -2,15 +2,15 @@
 # (sage_cpu.def). Don't submit this directly: `prep.py dag` writes the DAG, which sets repo, csv, out, chunk, part,
 # acct (accounting group), commit, image and disk (GB).
 #
-# The job gets SAGE's sage/ package, prep.py and the CSV in its sandbox, reads the frames at CIT (datafind with
-# the job's SciToken) and sends parts/ back to OUT/parts/.
+# The job gets SAGE's sage/ package, prep.py and the CSV in its sandbox, reads h(t) from CVMFS (datafind.igwn.org,
+# with the job's SciToken) and sends parts/ back to OUT/parts/.
 
 universe              = container
 container_image       = $(image)
 executable            = /opt/conda/envs/sage/bin/python
 transfer_executable   = False
 arguments             = "prep.py run $Fnx(csv) . --chunk $(chunk) --part $(part)"
-environment           = "OMP_NUM_THREADS=1 SAGE_COMMIT=$(commit) GWDATAFIND_SERVER=datafind.ldas.cit:80"
+environment           = "OMP_NUM_THREADS=1 SAGE_COMMIT=$(commit) GWDATAFIND_SERVER=datafind.igwn.org"
 
 should_transfer_files   = YES
 when_to_transfer_output = ON_EXIT
@@ -18,10 +18,11 @@ transfer_input_files    = $(repo)/sage, $(repo)/eucaif/vigilant/prep.py, $(csv)
 transfer_output_files   = parts
 initialdir              = $(out)
 
-use_oauth_services = scitokens
-# Frames: read at CIT, where datafind and the archive are
-+DESIRED_Sites     = "LIGO-CIT"
-requirements       = (Arch == "X86_64")
+use_oauth_services          = scitokens
+scitokens_oauth_permissions = read:/virgo gwdatafind.read
+# h(t): datafind.igwn.org gives /cvmfs/virgo.storage.igwn.org paths (IGWN private data in CVMFS, from OSDF),
+# read with the job's token; any node with that CVMFS will do
+requirements       = (Arch == "X86_64") && (HAS_CVMFS_IGWN_PRIVATE_DATA =?= True)
 
 output         = $(out)/logs/part_$(part).out
 error          = $(out)/logs/part_$(part).err

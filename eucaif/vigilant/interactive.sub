@@ -1,4 +1,4 @@
-# HTCondor: an interactive shell in the SAGE container on a CIT execute node, with the same image, files and
+# HTCondor: an interactive shell in the SAGE container on an execute node, with the same image, files and
 # credentials as a prep.sub job, to run or debug prep.py by hand (README.md, "Run prep.py by hand"):
 #
 #   condor_submit -i eucaif/vigilant/interactive.sub csv=/home/melissa.lopez/vigilant_test.csv
@@ -6,14 +6,16 @@
 
 universe              = container
 container_image       = osdf:///igwn/cit/staging/melissa.lopez/sage_cpu.sif
-environment           = "OMP_NUM_THREADS=1 GWDATAFIND_SERVER=datafind.ldas.cit:80"
+environment           = "OMP_NUM_THREADS=1 GWDATAFIND_SERVER=datafind.igwn.org"
 
 should_transfer_files = YES
 transfer_input_files  = $ENV(HOME)/sage/sage, $ENV(HOME)/sage/eucaif/vigilant/prep.py, $(csv)
 
-use_oauth_services = scitokens
-+DESIRED_Sites     = "LIGO-CIT"
-requirements       = (Arch == "X86_64")
+use_oauth_services          = scitokens
+scitokens_oauth_permissions = read:/virgo gwdatafind.read
+# h(t): datafind.igwn.org gives /cvmfs/virgo.storage.igwn.org paths (IGWN private data in CVMFS, from OSDF),
+# read with the job's token; any node with that CVMFS will do
+requirements       = (Arch == "X86_64") && (HAS_CVMFS_IGWN_PRIVATE_DATA =?= True)
 
 request_cpus   = 1
 request_memory = 4 GB
