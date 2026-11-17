@@ -18,6 +18,7 @@ need h5py and pandas.
 import argparse
 import os
 import subprocess
+import sys
 import tarfile
 import time
 from pathlib import Path
@@ -28,6 +29,8 @@ import pandas as pd
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent                                      # the SAGE repo (in a job's sandbox: not a repo)
+if (ROOT / "sage" / "__init__.py").exists() and str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))                              # run from the repo: import its sage (in a job: ./sage)
 CHANNEL, FRAMETYPE = "V1:Hrec_hoft_16384Hz", "HoftOnline"
 AVERAGES = {"median": "median", "welch": "mean"}   # file tag -> TorchWelch avg_method (gwpy's method="median" / "welch")
 DEFAULT_IMAGE = "osdf:///igwn/cit/staging/melissa.lopez/sage_cpu.sif"   # sage_cpu.def, uploaded as in README.md
@@ -232,7 +235,6 @@ def write_dag(csv, out_dir, parts, chunk, accounting_group, tar, image, retries=
     submits nothing (NOOP) but whose PRE script, OUT/merge.sh, runs prep.py merge on the submit machine with this
     Python once every part has succeeded (log: OUT/logs/merge.out)."""
     import shlex
-    import sys
     out_dir = Path(out_dir).resolve()
     csv = Path(csv).resolve()
     for d in ("logs", "parts"):

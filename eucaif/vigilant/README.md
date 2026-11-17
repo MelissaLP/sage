@@ -194,6 +194,27 @@ condor_submit_dag -force $OUT/vigilant.dag
 
 Keep the same `--chunk`: the parts are numbered by it. To start over, delete `$OUT`.
 
+### Run prep.py by hand
+
+To test or debug a part without the DAG. `prep.py` finds SAGE by itself (next to it in a job, the repo otherwise).
+
+On an execute node, exactly as a job (same image, files and token), in an interactive shell:
+
+```bash
+condor_submit -i eucaif/vigilant/interactive.sub csv=$TEST.csv
+# inside, in the sandbox (sage/, prep.py and the CSV are there):
+python prep.py run vigilant_test.csv . --chunk 10 --part 0        # -> ./parts/virgo_glitches_part000_{median,welch}.h5
+exit
+```
+
+Results stay in the sandbox and are deleted with it. On the login node, in the image (your home is visible there):
+
+```bash
+apptainer exec sage_cpu.sif python eucaif/vigilant/prep.py run $TEST.csv /home/melissa.lopez/vigilant_hand --chunk 10 --part 0
+```
+
+The login node may read the frames differently from the execute nodes, so only the first checks what the jobs see.
+
 ### 6. The result
 
 When the DAG is done, `$OUT/logs/merge.out` ends with the two files and the tar (if a part is missing, it lists it
