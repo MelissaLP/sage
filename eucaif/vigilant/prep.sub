@@ -9,7 +9,7 @@ container_image       = $(image)
 executable            = /opt/conda/envs/sage/bin/python
 transfer_executable   = False
 arguments             = "prep.py run $Fnx(csv) . --chunk $(chunk) --part $(part)"
-environment           = "OMP_NUM_THREADS=1 SAGE_COMMIT=$(commit) GWDATAFIND_SERVER=datafind.igwn.org"
+environment           = "OMP_NUM_THREADS=1 SAGE_COMMIT=$(commit) GWDATAFIND_SERVER=datafind.ldas.cit:80"
 
 should_transfer_files   = YES
 when_to_transfer_output = ON_EXIT
@@ -17,9 +17,8 @@ transfer_input_files    = $(repo)/sage, $(repo)/eucaif/vigilant/prep.py, $(csv)
 transfer_output_files   = parts
 initialdir              = $(out)
 
-use_oauth_services          = scitokens
-scitokens_oauth_permissions = read:/virgo gwdatafind.read
-# h(t): gwpy's TimeSeries.get asks GWDATAFIND_SERVER for the files and reads them, with the job's token
+# h(t): V1Online frames on CIT's /ceph (README.md, "Virgo data"), found by gwpy's TimeSeries.get with
+# the CIT datafind server: no token. Submit from ldas-grid (CIT's cluster); OSDF does not serve V1Online
 requirements       = (Arch == "X86_64")
 
 output         = $(out)/logs/part_$(part).out
