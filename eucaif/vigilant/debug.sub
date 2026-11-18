@@ -1,4 +1,4 @@
-# HTCondor: a job that only sleeps, with the same image, files and token as a prep.sub job, to get a shell in it
+# HTCondor: a job that only sleeps, with the same image and files as a prep.sub job, to get a shell in it
 # with condor_ssh_to_job and run or debug prep.py by hand (README.md, "Run prep.py by hand"):
 #
 #   condor_submit eucaif/vigilant/debug.sub csv=/home/melissa.lopez/vigilant_test.csv
