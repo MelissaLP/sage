@@ -1,5 +1,5 @@
 # HTCondor: a job that only sleeps, with the same image, files and token as a prep.sub job, to get a shell in it
-# with condor_ssh_to_job and run or debug prep.py by hand, one part or the whole DAG (README.md, "Run prep.py by hand"):
+# with condor_ssh_to_job and run or debug prep.py by hand (README.md, "Run prep.py by hand"):
 #
 #   condor_submit eucaif/vigilant/debug.sub csv=/home/melissa.lopez/vigilant_test.csv
 #   condor_ssh_to_job <job id>                                     # once it runs: a shell in the sandbox
@@ -15,8 +15,7 @@ environment           = "OMP_NUM_THREADS=1 GWDATAFIND_SERVER=datafind.igwn.org"
 
 should_transfer_files   = YES
 when_to_transfer_output = ON_EXIT
-transfer_input_files    = $ENV(HOME)/sage/sage, $ENV(HOME)/sage/eucaif/vigilant/prep.py,
-                          $ENV(HOME)/sage/eucaif/vigilant/README.md, $(csv)
+transfer_input_files    = $ENV(HOME)/sage/sage, $ENV(HOME)/sage/eucaif/vigilant/prep.py, $(csv)
 transfer_output_files   = ""
 
 use_oauth_services          = scitokens
