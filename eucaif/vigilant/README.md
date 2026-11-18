@@ -62,7 +62,7 @@ img = qt(x, gps=c)                              # (64, 4, 256, 256): window, tim
 
 For each glitch:
 
-1. **Data**: 64 s of `V1:Hrec_hoft_16384Hz` (frame type `HoftOnline`) centred on `GPStime`, at its native 16384 Hz
+1. **Data**: 64 s of `V1:Hrec_hoft_16384Hz` (frame type `V1Online`) centred on `GPStime`, at its native 16384 Hz
    (no resampling).
 2. **PSD** from the same 64 s: `sage.dsp.welch.TorchWelch`, 4 s Hann segments, 2 s overlap, median average
    (`_median` file) or mean average (`_welch` file); the ASD is its square root.
@@ -159,7 +159,7 @@ the data (`RuntimeError`/`FileNotFoundError` from `TimeSeries.get` in `part_*.ou
 job cannot reach h(t): stop there and check it in a debug job ("Run prep.py by hand"):
 
 ```bash
-python -c "from gwdatafind import find_urls; print(find_urls('V', 'HoftOnline', 1264551656, 1264551720))"
+python -c "from gwdatafind import find_urls; print(find_urls('V', 'V1Online', 1266378468, 1266378532))"
 ls /cvmfs/virgo.storage.igwn.org/ | head        # empty or an error: no token or no CVMFS on that node
 ```
 
