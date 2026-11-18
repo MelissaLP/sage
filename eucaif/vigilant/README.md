@@ -227,6 +227,24 @@ exit
 condor_rm 1234567                                                  # else it ends by itself after 2 h (arguments in debug.sub)
 ```
 
+The whole DAG of the 20-glitch test, node by node, in that shell (the same commands as `prep.sub`, `merge.sub` and
+`tar.sub`; the sandbox holds `sage/`, `prep.py`, `README.md` and the CSV):
+
+```bash
+export SAGE_COMMIT=test OMP_NUM_THREADS=1
+python prep.py parts vigilant_test.csv --chunk 10                  # 2
+python prep.py run vigilant_test.csv . --chunk 10 --part 0         # part0: "time per sample ...", ~1 s per glitch
+python prep.py run vigilant_test.csv . --chunk 10 --part 1         # part1
+ls -lh parts/                                                      # virgo_glitches_part00{0,1}_{median,welch}.h5
+python prep.py merge vigilant_test.csv . --chunk 10 --average median --parts-dir parts    # merge_median
+python prep.py merge vigilant_test.csv . --chunk 10 --average welch --parts-dir parts     # merge_welch
+python prep.py tar vigilant_test.csv .                             # tar: -> ./virgo_glitches.tar
+python -c "import h5py; h = h5py.File('virgo_glitches_median.h5'); print(h['whitened'].shape, h.attrs['skipped_rows'])"
+```
+
+`(20, 524288) []` means every node works on an execute node. A part that hangs or skips every glitch points at
+the data access (the `find_urls` check of step 2).
+
 Results stay in the sandbox and are deleted with it. On the login node, in the image (your home is visible there):
 
 ```bash
