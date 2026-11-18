@@ -115,6 +115,8 @@ tar                tar.sub     prep.py tar      in:  prep.py, README.md, the CSV
 The logs of every node are in `OUT/logs/` (`part_<k>`, `merge_<average>`, `tar`, `.out`/`.err`), and the HTCondor
 event log of all of them is `OUT/logs/vigilant.log`.
 
+## For Melissa of the future
+
 ### 1. Set up (once)
 
 On `ldas-grid` (CIT):
