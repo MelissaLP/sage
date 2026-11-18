@@ -7,6 +7,7 @@ Whitened Virgo (V1) strain around the O3b glitches of a glitch CSV: `virgo_o3b_n
 > **Virgo data:** channel **`V1:Hrec_hoft_16384Hz`**, frame type **`V1Online`** (`CHANNEL`, `FRAMETYPE` in
 > `prep.py`). At CIT the frames are in `/ceph/mirror/frames/O3/V1Online/`, found with
 > `GWDATAFIND_SERVER=datafind.ldas.cit:80`. Not `HoftOnline`: its files don't hold this channel.
+> **The jobs only run on `ldas-grid`** (CIT's cluster, which has `/ceph`); OSDF does not serve `V1Online`.
 
 ## Data format
 
