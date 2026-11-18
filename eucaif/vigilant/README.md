@@ -88,6 +88,17 @@ file, and every node is a container job that sees nothing of your home directory
 gwpy 4, h5py, a frame reader) holds no SAGE, so code changes need no rebuild. The old `anomaly` image is Python 3.9,
 which SAGE does not run on.
 
+**Jobs don't see your home directory any more.** On the IGWN clusters, jobs no longer read `/home` directly:
+a job starts in an empty sandbox on the execute node, and only what the submit file lists gets there.
+- **In:** `transfer_input_files` (here SAGE's `sage/`, `prep.py`, the CSV, the part files). HTCondor copies them
+  from the submit machine into the sandbox, and the command runs there (`prep.py run vigilant_test.csv .`).
+- **Out:** `transfer_output_files` (here `parts/`, the `.h5`, the tar). HTCondor copies them back to `initialdir`
+  (`OUT`) when the job ends; anything else in the sandbox is deleted with it.
+- **Software:** the job runs in the `sage_cpu.sif` container (`universe = container`, `container_image`), which
+  HTCondor also transfers. It brings Python and the libraries, so nothing comes from your home's conda env; SAGE
+  itself comes as transferred code, so a `git pull` is enough after a change.
+- **Data:** the container sees the node's `/ceph`, where `V1Online` is, through gwpy (`TimeSeries.get`).
+
 ```
 CSV ── prep.py dag ──> OUT/vigilant.dag                          every node: universe = container, retried twice
 
