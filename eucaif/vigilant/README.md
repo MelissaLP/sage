@@ -80,11 +80,11 @@ Given the same data, steps 2 and 3 match gwpy to ~1e-11.
 
 ## HTCondor
 
-The jobs run in a container (`universe = container`, as in the anomalydetection CIT pipeline), on any IGWN node
-with the IGWN private data (OSDF, in CVMFS): gwpy's `TimeSeries.get` finds h(t) with `GWDATAFIND_SERVER=datafind.igwn.org`
-and reads it with the job's SciToken (`read:/virgo gwdatafind.read`). Every step is a node of one DAG, with its own
-submit file, and every node is a container job that sees nothing of your home directory: HTCondor transfers its
-inputs into the job's sandbox and its outputs back to `OUT`. The image (`sage_cpu.def`: Python 3.11, CPU torch,
+The jobs run in a container (`universe = container`, as in the anomalydetection CIT pipeline) on CIT's cluster,
+submitted from `ldas-grid`: gwpy's `TimeSeries.get` finds the `V1Online` frames on `/ceph` with
+`GWDATAFIND_SERVER=datafind.ldas.cit:80` (no token needed). Every step is a node of one DAG, with its own submit
+file, and every node is a container job that sees nothing of your home directory: HTCondor transfers its inputs
+(and the image, `~/sage/sage_cpu.sif`) into the job's sandbox and its outputs back to `OUT`. The image (`sage_cpu.def`: Python 3.11, CPU torch,
 gwpy 4, h5py, a frame reader) holds no SAGE, so code changes need no rebuild. The old `anomaly` image is Python 3.9,
 which SAGE does not run on.
 
@@ -106,7 +106,7 @@ event log of all of them is `OUT/logs/vigilant.log`.
 
 ### 1. Set up (once)
 
-On a CIT login node (e.g. `ldas-osg`):
+On `ldas-grid` (CIT):
 
 ```bash
 # SAGE on the eucaif branch
@@ -122,16 +122,12 @@ head -3 ~/sage/eucaif/vigilant/virgo_o3b_no_NOTA_no_rareclasses_no_Whis_from_v4.
 source /cvmfs/software.igwn.org/conda/etc/profile.d/conda.sh
 conda activate igwn
 
-# the image: build it and put it on OSDF (~1 GB). Rebuild only if sage_cpu.def changes
+# the image (~1 GB), in the repo, where the jobs take it from. Rebuild only if sage_cpu.def changes
 cd ~/sage
 apptainer build sage_cpu.sif eucaif/vigilant/sage_cpu.def      # ends with "ok 2.10.0 ..." from its %test
-htgettoken -v -a vault.ligo.org -i igwn --scopes "read:/staging write:/staging"
-pelican object put sage_cpu.sif osdf:///igwn/cit/staging/melissa.lopez/sage_cpu.sif
-pelican object ls osdf:///igwn/cit/staging/melissa.lopez/      # check it is there
 ```
 
-`osdf:///igwn/cit/staging/melissa.lopez/sage_cpu.sif` is the default image; someone else passes theirs with
-`--image`.
+`~/sage/sage_cpu.sif` is the default image (git ignores `*.sif`); another one is passed with `--image`.
 
 ### 2. Test with 20 glitches
 
@@ -165,11 +161,11 @@ job cannot reach h(t): stop there and check it in a debug job ("Run prep.py by h
 
 ```bash
 python -c "from gwdatafind import find_urls; print(find_urls('V', 'V1Online', 1266378468, 1266378532))"
-ls /cvmfs/virgo.storage.igwn.org/ | head        # empty or an error: no token or no CVMFS on that node
+ls /ceph/mirror/frames/O3/V1Online/ | head      # empty or an error: the job does not see /ceph
 ```
 
-`find_urls` is what `TimeSeries.get` asks; it should give files the job can open (expected under
-`/cvmfs/virgo.storage.igwn.org/`).
+`find_urls` is what `TimeSeries.get` asks; it should give `file://localhost/ceph/mirror/frames/O3/V1Online/...`
+files, which the job must be able to open.
 
 ### 3. Run all glitches
 
@@ -200,8 +196,8 @@ ls $OUT/parts/                                  # the parts sent back so far
   the tar gets ~58 GB and returns ~58 GB. They ask for that much sandbox disk (`request_disk`), so they may wait
   longer for a machine; `condor_q -better-analyze <id>` if they stay idle.
 - Glitches without data are skipped and listed in the files' `skipped_rows` attribute (CSV rows); the part goes on.
-- A job on hold: `condor_q -hold` says why. Out of memory: `condor_qedit <id> RequestMemory=8000`; expired
-  token: `htgettoken ...` as in step 1; then `condor_release <id>`.
+- A job on hold: `condor_q -hold` says why. Out of memory: `condor_qedit <id> RequestMemory=8000`; then
+  `condor_release <id>`.
 
 ### 5. If something fails
 
@@ -220,7 +216,7 @@ Keep the same `--chunk`: the parts are numbered by it. To start over, delete `$O
 
 To test or debug a part without the DAG. `prep.py` finds SAGE by itself (next to it in a job, the repo otherwise).
 
-On an execute node, exactly as a job (same image, files and token): submit a job that only sleeps, and log into it
+On an execute node, exactly as a job (same image and files): submit a job that only sleeps, and log into it
 (`condor_submit -i` is not allowed in the pool):
 
 ```bash
@@ -237,15 +233,15 @@ Results stay in the sandbox and are deleted with it.
 #### On the login node, without HTCondor
 
 The whole DAG of the 20-glitch test, step by step, by yourself: the same commands as the nodes, in the same image
-(your home is visible there). The token goes in your home, as apptainer does not see `/run/user`:
+(your home is visible there), with `/ceph` mounted and your grid certificate hidden (`~/.globus`: its
+password-protected key breaks gwdatafind's requests in the container):
 
 ```bash
 cd ~/sage
-export BEARER_TOKEN_FILE=$HOME/.vigilant_token GWDATAFIND_SERVER=datafind.igwn.org
 export OMP_NUM_THREADS=1 SAGE_COMMIT=$(git rev-parse --short HEAD)
-htgettoken -a vault.ligo.org -i igwn --scopes "read:/virgo gwdatafind.read" -o $BEARER_TOKEN_FILE
-HAND=/home/melissa.lopez/vigilant_hand
-run() { apptainer exec -B /cvmfs sage_cpu.sif python eucaif/vigilant/prep.py "$@"; }
+NOCERT=$(mktemp -d) HAND=/home/melissa.lopez/vigilant_hand
+run() { apptainer exec -B /ceph -B $NOCERT:$HOME/.globus --env GWDATAFIND_SERVER=datafind.ldas.cit:80 \
+        sage_cpu.sif python eucaif/vigilant/prep.py "$@"; }
 
 run parts $TEST.csv --chunk 10                                     # 2
 run run $TEST.csv $HAND --chunk 10 --part 0                        # part0: "time per sample ...", ~1 s per glitch
@@ -258,7 +254,7 @@ python -c "import h5py; h = h5py.File('$HAND/virgo_glitches_median.h5'); print(h
 ```
 
 `(20, 524288) []` means every step works. A part that hangs or skips every glitch points at the data access: run
-the `find_urls` check of step 2 in the image (`apptainer exec -B /cvmfs sage_cpu.sif python -c ...`). A part
+the `find_urls` check of step 2 in the image (`apptainer exec -B /ceph ... sage_cpu.sif python -c ...`). A part
 already in `$HAND/parts` is not redone: delete it to rerun it.
 
 The login node may read the frames differently from the execute nodes, so only the first checks what the jobs see.

@@ -190,3 +190,6 @@ scratch
 # Reference PDFs for sage/search (fetched locally, not redistributed)
 docs/references/*.pdf
 references/*.pdf
+
+# Apptainer images (eucaif/vigilant/sage_cpu.def)
+*.sif
