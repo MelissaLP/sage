@@ -4,6 +4,10 @@ Whitened Virgo (V1) strain around the O3b glitches of a glitch CSV: `virgo_o3b_n
 (12,186 glitches, from virgo-glitch-classification's `data/csvs/`, copied next to this README; not committed), made by `prep.py`
 (`save_glitches`; on HTCondor, see below; `virgo_data_prep.ipynb` does a few glitches interactively).
 
+> **Virgo data:** channel **`V1:Hrec_hoft_16384Hz`**, frame type **`V1Online`** (`CHANNEL`, `FRAMETYPE` in
+> `prep.py`). At CIT the frames are in `/ceph/mirror/frames/O3/V1Online/`, found with
+> `GWDATAFIND_SERVER=datafind.ldas.cit:80`. Not `HoftOnline`: its files don't hold this channel.
+
 ## Data format
 
 Two HDF5 files with the same glitches and layout, differing only in the PSD average used for whitening:
