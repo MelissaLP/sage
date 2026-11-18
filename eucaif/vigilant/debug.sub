@@ -7,7 +7,7 @@
 #   condor_rm <job id>                                             # when done (else it ends after 2 h)
 
 universe              = container
-container_image       = osdf:///igwn/cit/staging/melissa.lopez/sage_cpu.sif
+container_image       = $ENV(HOME)/sage/sage_cpu.sif
 executable            = /bin/sleep
 transfer_executable   = False
 arguments             = 7200                    # seconds the shell stays available

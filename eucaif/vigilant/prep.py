@@ -33,7 +33,7 @@ if (ROOT / "sage" / "__init__.py").exists() and str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))                              # run from the repo: import its sage (in a job: ./sage)
 CHANNEL, FRAMETYPE = "V1:Hrec_hoft_16384Hz", "V1Online"
 AVERAGES = {"median": "median", "welch": "mean"}   # file tag -> TorchWelch avg_method (gwpy's method="median" / "welch")
-DEFAULT_IMAGE = "osdf:///igwn/cit/staging/melissa.lopez/sage_cpu.sif"   # sage_cpu.def, uploaded as in README.md
+DEFAULT_IMAGE = str(ROOT / "sage_cpu.sif")    # sage_cpu.def, built in the repo (README.md); HTCondor transfers it
 
 
 def generate_data(start, end, highpass=10, keep=32):
